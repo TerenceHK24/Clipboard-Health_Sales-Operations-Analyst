@@ -89,4 +89,7 @@ export class CrmClient {
   async get(id) { return record(await this.request('GET', 'accounts', { id }), this.config.fields.id); }
   async create(body) { return record(await this.request('POST', 'accounts', { body }), this.config.fields.id); }
   async patch(id, body) { return record(await this.request('PATCH', 'accounts', { id, body }), this.config.fields.id); }
+  async getContact(id) { return record(await this.request('GET', 'contacts', { id }), this.config.contactFields.id); }
+  async createContact(body) { return record(await this.request('POST', 'contacts', { body }), this.config.contactFields.id); }
+  async patchContact(id, body) { return record(await this.request('PATCH', 'contacts', { id, body }), this.config.contactFields.id); }
 }
