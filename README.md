@@ -41,7 +41,7 @@ All `GET` requests are read-only. The scanner enumerates all paginated accounts 
 npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst review --env-file /private/path/.env --data-dir /private/path/bellhaven-state
 ```
 
-Open the **private loopback URL printed in your terminal**, e.g. `http://127.0.0.1:4310/#...`. The fragment is a randomly generated session key, **not your CRM token**. The app can be opened only on the local computer. Click **Run read-only scan**, inspect a proposal's site/CRM evidence and exact field-level changes, type a reviewer name, then **Approve and write** or **Reject**. The approval confirmation is explicit; no writes occur from running a scan or opening the review UI. Do not expose the loopback service through a proxy or tunnel.
+Open the **private loopback URL printed in your terminal**, e.g. `http://127.0.0.1:4310/#...`. The fragment is a randomly generated session key, **not your CRM token**. The app can be opened only on the local computer. Click **Run read-only scan**, inspect a proposal's site/CRM evidence and exact field-level changes, type a reviewer name, then **Approve and write** or **Reject**. If many accounts have the same discrepancy pattern, one grouped review shows the full per-account operations and can **Approve all** or **Reject all** with one confirmation. For unresolved identity, expand the individual member and use **Record manual match**; this saves a reviewer-selected account mapping locally but does not write to CRM. The approval confirmation is explicit; no writes occur from running a scan or opening the review UI. Do not expose the loopback service through a proxy or tunnel.
 
 To see prior decisions without running a scan:
 
@@ -58,7 +58,11 @@ npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst status --
 - Duplicate candidates: propose `duplicate_of_account=<survivor ID>`, `status=Inactive`, and explanatory note on the losing record; preserve all billing history, contacts, and data. Never merge or delete.
 - Wrong parent **with `lifetime_revenue > 0` AND `outstanding_ar > 0`**: propose CHOW. After approval, create the current facility account under the correct parent and set **only** `chow_current_account` on the old account. Keep old parent, billing fields, name, status, notes and contacts unchanged.
 - Wrong parent when either numeric financial value is zero: propose direct re-parent of the existing record. Missing or invalid financial figures block ownership changes.
-- Contact administrator differences are shown as **notices**. No implicit contact create/rename/update is performed.
+- Administrator is verified against active CRM contacts (not facility-account fields). A missing/different administrator creates a separate approval-only **contact proposal**: create or reactivate the published administrator, then mark outdated administrator contacts Inactive. Never rename an unrelated person, change their email or phone, invent a new email, or modify historical non-administrator contacts. Ambiguous contact identity requires manual resolution. With CHOW, old contacts remain untouched; a follow-up scan proposes the new current account's administrator.
+- Care-type equivalence is configurable: **Memory Care** in CRM and **Memory Support** on the website mean the same category. Neither causes a false discrepancy. Additional equivalences may be configured without listing facilities.
+- The leading article and punctuation in a community name are ignored **for identity matching**, but canonical public spelling is still proposed as a name correction (e.g., initial “The” and a hyphen).
+- Exact global name matches can identify relocated or reparented facilities even when their city/state/phone changed. If **every identifying field differs except care type**, no defensible automatic identity match exists: reviewers can manually link a specific verified existing CRM account, which is saved to SQLite and triggers a new **read-only** scan. Linking is not CRM approval. The link must remain unchanged through approval.
+- Repeated discrepancies of the **same kind and field set** appear as **one review group**, with an account-by-account before/after preview, expandable evidence and a single explicit Approve All / Reject All action. The server rejects partial, stale or substituted group membership; each member is individually journaled. Group CHOW/reparent/duplicate actions carry a prominent financial/identity warning; failed members remain blocked for explicit retry.
 - Publicly missing fields are not used to erase existing CRM values. The footer has no published corporate ZIP, so none is invented.
 
 ## Idempotence, verification and limitations
@@ -85,6 +89,6 @@ npm test
 node bin/bellhaven-scrape.js --help
 ```
 
-Tests use local mock data only and never access or mutate the live CRM. Live operation requires a valid token and host connectivity. API reference: https://analyst-assessment-production.up.railway.app/api/docs
+Tests include synthetic examples based on the public Amberly Manor, Dayton and Akron record shapes, but they do **not** assert current CRM values. They use local mock data only and never access or mutate the live CRM. The CRM API's OpenAPI documentation does not specify contact request-body schemas, so production POST/PATCH contact compatibility must be checked in a credentialed sandbox before approval; failure is surfaced as blocked rather than silently retried. Live operation requires a valid token and host connectivity. API reference: https://analyst-assessment-production.up.railway.app/api/docs
 
 **Important:** If a bearer token was shared in a conversation or other location, replace/revoke it according to your CRM's controls and use the replacement only in your private local `.env` file.
