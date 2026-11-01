@@ -21,8 +21,8 @@ export function parent(overrides = {}) {
 export const snapshot = (accounts = [parent(), account()], site = website()) => ({ accounts, website: site, contacts: [] });
 
 export class MockClient {
-  constructor(rows) { this.rows = new Map(rows.map(row => [row.id, clone(row)])); this.writes = []; this.sequence = 0; }
-  async list(resource = 'accounts') { return resource === 'contacts' ? [] : clone([...this.rows.values()]); }
+  constructor(rows, contacts = []) { this.rows = new Map(rows.map(row => [row.id, clone(row)])); this.contactRows = new Map(contacts.map(row => [row.id,clone(row)])); this.writes = []; this.sequence = 0; }
+  async list(resource = 'accounts') { return clone([...(resource === 'contacts' ? this.contactRows : this.rows).values()]); }
   async get(id) { if (!this.rows.has(id)) throw new Error('Not found'); return clone(this.rows.get(id)); }
   async create(body) {
     this.writes.push({ method: 'POST', body: clone(body) });
@@ -32,6 +32,22 @@ export class MockClient {
     this.rows.set(row.id, row);
     if (this.failAfterCreate) { this.failAfterCreate = false; throw new Error('Response lost after create'); }
     return clone(row);
+  }
+  async getContact(id) { if (!this.contactRows.has(id)) throw new Error('Contact not found'); return clone(this.contactRows.get(id)); }
+  async createContact(body) {
+    this.writes.push({ resource:'contacts', method:'POST', body:clone(body) });
+    if (this.failBeforeContactCreate) throw new Error('Contact outcome unknown');
+    const row = { id: `new-contact-${++this.sequence}`, email: null, phone: null, ...clone(body) };
+    this.contactRows.set(row.id,row);
+    if (this.failAfterContactCreate) { this.failAfterContactCreate=false; throw new Error('Contact create response lost'); }
+    return clone(row);
+  }
+  async patchContact(id, body) {
+    this.writes.push({ resource:'contacts', method:'PATCH', id, body:clone(body) });
+    if (this.failBeforeContactPatch) throw new Error('Contact PATCH uncertain');
+    Object.assign(this.contactRows.get(id), clone(body));
+    if (this.failAfterContactPatch) { this.failAfterContactPatch=false; throw new Error('Contact PATCH response lost'); }
+    return this.getContact(id);
   }
   async patch(id, body) {
     this.writes.push({ method: 'PATCH', id, body: clone(body) });
