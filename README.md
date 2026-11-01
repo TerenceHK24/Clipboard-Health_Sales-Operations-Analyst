@@ -17,37 +17,35 @@ npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scrape --
 
 The CSV contains one `record_type=company` entry and all discovered `record_type=facility` entries. The corporate name and office address come from `footer`; a missing ZIP stays blank, not guessed. The scraper follows pagination plus community links on the homepage and `/about`, checks the advertised counts, and includes acquired facility brands. Optional `--snapshot public-snapshot.json` exports metadata and coverage details.
 
-## Configure credential locally
+## CRM token: prompted every time, not stored
 
-In a private directory you control, create a `.env` file containing one line:
-
-```text
-CRM_TOKEN=YOUR_PRIVATE_BEARER_TOKEN
-```
-
-On macOS/Linux, restrict access with `chmod 600 /path/to/.env`. On Windows, limit ACL access to your user. The app does not accept tokens as CLI arguments. The `.env` should **not** be inside any public Git repository.
-
-## Scan without making changes
+**Do not create a token file.** Every time you start `scan` or `review`, the application requests the CRM bearer token directly in the terminal, with **input hidden**. Paste the token, then press Enter. The value stays in the running Node.js process only, is sent only as the `Authorization` header to the configured CRM API, and is not saved in `.env`, JSON, SQLite, CSV, logs, CLI arguments or shell history. Exit the process to end that authenticated session. A new process prompts again, even when you use the same state directory.
 
 ```sh
-npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scan --env-file /private/path/.env --data-dir /private/path/bellhaven-state
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scan --data-dir ./bellhaven-state
+# Terminal: Enter CRM bearer token (input hidden):
 ```
 
-All `GET` requests are read-only. The scanner enumerates all paginated accounts and contacts (not just `q=bellhaven`), parses public company and community pages, and creates candidate discrepancies in a persistent SQLite journal (`review.sqlite`). A failed or incomplete scan does not replace the last complete result. Decisions and previously approved operations survive restarts and scans when the same credential scope and `--data-dir` are used. State contains CRM details: restrict access and back it up.
+The `scan` command reads the public website and full CRM accounts and contacts via GET requests, then journals suggested changes. **It never writes to the CRM.** All account/contact data and decisions (but no token) are stored in local `review.sqlite`. Keep that directory private and backed up.
 
-## Start local review app
+To start the local reviewer:
 
 ```sh
-npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst review --env-file /private/path/.env --data-dir /private/path/bellhaven-state
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst review --data-dir ./bellhaven-state
+# Terminal: Enter CRM bearer token (input hidden):
 ```
 
-Open the **private loopback URL printed in your terminal**, e.g. `http://127.0.0.1:4310/#...`. The fragment is a randomly generated session key, **not your CRM token**. The app can be opened only on the local computer. Click **Run read-only scan**, inspect a proposal's site/CRM evidence and exact field-level changes, type a reviewer name, then **Approve and write** or **Reject**. If many accounts have the same discrepancy pattern, one grouped review shows the full per-account operations and can **Approve all** or **Reject all** with one confirmation. For unresolved identity, expand the individual member and use **Record manual match**; this saves a reviewer-selected account mapping locally but does not write to CRM. The approval confirmation is explicit; no writes occur from running a scan or opening the review UI. Do not expose the loopback service through a proxy or tunnel.
+Open the **private loopback URL printed in the terminal**, e.g. `http://127.0.0.1:4310/#...`. The fragment is a randomly generated session key, **not your CRM token**. Click **Run read-only scan**, inspect public and CRM evidence and field-level changes, then explicitly Approve or Reject. Repeated issues are grouped with per-account details and group decisions. For unresolved identity, make a manual link, which does not write to CRM.
 
-To see prior decisions without running a scan:
+To inspect the local journal without contacting CRM or entering a token:
 
 ```sh
-npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst status --env-file /private/path/.env --data-dir /private/path/bellhaven-state
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst status --data-dir ./bellhaven-state
 ```
+
+**Interactive-terminal requirement:** `scan` and `review` fail closed if started without a real terminal. The old `--env-file` flag has been removed; `CRM_TOKEN` in the environment is ignored. Do not put the token in any config file or shell command. No browser prompt or token storage is used. Running the public-only `scrape` command requires no token.
+
+**Persistent decisions across token changes:** the state is scoped to the website and CRM API URL, not the token. Always use the same `--data-dir`. For previously saved v2.1 journals using the old token-based scope, pass the old data directory and its original token once to migrate; after that, new tokens work with the same journal. If the original token is already revoked, preserve the old journal and arrange a controlled migration rather than deleting the decisions.
 
 ## Reconciliation rules
 
@@ -75,7 +73,7 @@ npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst status --
 
 ## Daily schedule (configuration only)
 
-See [`docs/daily-schedule.md`](docs/daily-schedule.md). Scheduled jobs run **`scan` only**. The included example is not installed or enabled.
+See [`docs/daily-schedule.md`](docs/daily-schedule.md). You can schedule **public-site-only** `scrape` daily with no token, but a daily CRM reconciliation cannot run unattended while requiring a fresh hidden token from a person each time. Run `scan` interactively when present. The example schedule is not installed or enabled.
 
 ## Configuration and tests
 
@@ -91,4 +89,4 @@ node bin/bellhaven-scrape.js --help
 
 Tests include synthetic examples based on the public Amberly Manor, Dayton and Akron record shapes, but they do **not** assert current CRM values. They use local mock data only and never access or mutate the live CRM. The CRM API's OpenAPI documentation does not specify contact request-body schemas, so production POST/PATCH contact compatibility must be checked in a credentialed sandbox before approval; failure is surfaced as blocked rather than silently retried. Live operation requires a valid token and host connectivity. API reference: https://analyst-assessment-production.up.railway.app/api/docs
 
-**Important:** If a bearer token was shared in a conversation or other location, replace/revoke it according to your CRM's controls and use the replacement only in your private local `.env` file.
+**Important:** If a bearer token was shared in a conversation or another location, rotate/revoke it using the CRM controls and paste the replacement only into the hidden terminal prompt.
