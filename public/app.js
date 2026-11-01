@@ -54,7 +54,7 @@ function render() {
       element('small', company.zip ? `Published ZIP: ${company.zip}` : 'ZIP not published; existing CRM postal data is preserved.'));
     const meta = element('div'); meta.append(sourceLink(company.source_url), element('p', `Last successful scan: ${new Date(latest.at).toLocaleString()}`, 'timestamp'));
     $('company').append(identity, meta);
-  } else $('company').append(element('p', 'No scan yet. Set up the CRM token in your environment, then run a read-only scan.'));
+  } else $('company').append(element('p', 'No scan yet. The CRM token was entered privately when you launched the app. Select Run read-only scan to begin.'));
   const items = filtered();
   const groups = new Map();
   for (const item of items) {
