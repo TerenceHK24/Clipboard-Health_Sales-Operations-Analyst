@@ -1,0 +1,17 @@
+{
+  "version": "2.3.0",
+  "verified_runtime_commit": "2240ab11f65f50a23ca0d1b04f208e23283d392f",
+  "verification_run": "https://github.com/TerenceHK24/Clipboard-Health_Sales-Operations-Analyst/actions/runs/41349526736",
+  "unit_and_http_pipeline": { "passed": 108, "failed": 0, "skipped": 0 },
+  "core_subset": { "passed": 96, "failed": 0 },
+  "real_browser_synthetic_crm": { "checks_passed": 9, "uncaught_javascript_errors": 0 },
+  "packaged_cli": { "version": "2.3.0", "version_command_passed": true, "help_command_passed": true, "runtime_files": 18 },
+  "public_website_smoke": { "successful": true, "corporate_records": 1, "facility_records": 35, "directory_pages": 3, "directory_advertised": 34, "homepage_advertised": 35, "corporate_zip": null },
+  "live_authenticated_crm": { "tested": false, "writes_performed": false },
+  "notes": [
+    "All approval/writeback tests use synthetic local HTTP CRM fixtures, not the user's sandbox.",
+    "The public website smoke test reads only unauthenticated public pages.",
+    "No user CRM token is stored in code, artifacts, CI secrets or logs.",
+    "Cross-platform CI runs separately on the released main commit; see that commit's Actions results."
+  ]
+}
