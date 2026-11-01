@@ -10,7 +10,7 @@ const decode = row => row ? { ...JSON.parse(row.data), status: row.status, error
 
 /** Durable local journal. Never keep this database inside npm's disposable cache. */
 export class Store {
-  constructor(directory, scope) {
+  constructor(directory, scope, { legacyScope } = {}) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.path = join(directory, 'review.sqlite');
     this.db = new DatabaseSync(this.path);
@@ -27,7 +27,16 @@ export class Store {
       CREATE TABLE IF NOT EXISTS locks(id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL, pid INTEGER NOT NULL, host TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS manual_matches(site_url TEXT PRIMARY KEY, account_id TEXT NOT NULL, reviewer TEXT NOT NULL, created_at TEXT NOT NULL);`);
     const existing = this.db.prepare('SELECT value FROM metadata WHERE key=?').get('scope');
-    if (existing && existing.value !== scope) { this.db.close(); throw new Error('This state directory belongs to a different API/site/token scope. Use a separate directory.'); }
+    if (existing && existing.value !== scope) {
+      if (legacyScope && existing.value === legacyScope) {
+        // One-time compatibility migration from the old token-derived scope.
+        // The token itself is neither stored nor included in the new scope.
+        this.db.prepare('UPDATE metadata SET value=? WHERE key=?').run(scope, 'scope');
+      } else {
+        this.db.close();
+        throw new Error('This state directory belongs to a different API/site scope (or uses a legacy token-based scope). Select the correct directory; do not reset prior decisions.');
+      }
+    }
     this.db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)').run('scope', scope);
   }
   manualLinks() { return Object.fromEntries(this.db.prepare('SELECT site_url,account_id FROM manual_matches').all().map(row => [row.site_url, row.account_id])); }
