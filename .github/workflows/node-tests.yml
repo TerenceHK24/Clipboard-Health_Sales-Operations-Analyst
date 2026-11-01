@@ -1,30 +1,45 @@
-name: Tests (no live CRM access)
+name: Tests (synthetic CRM only)
 on:
   push:
-    paths:
-      - 'src/**'
-      - 'bin/**'
-      - 'public/**'
-      - 'fixtures/**'
-      - 'test/**'
-      - 'package.json'
-      - 'package-lock.json'
-      - '.github/workflows/node-tests.yml'
+    branches: [main]
+    paths: ['src/**', 'bin/**', 'public/**', 'fixtures/**', 'test/**', 'scripts/**', 'package*.json', '.github/workflows/node-tests.yml']
   pull_request:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        node: ['22', '24']
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ['22']
+        include:
+          - os: ubuntu-latest
+            node: '24'
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - run: npm install --no-audit --no-fund
+      - run: npm ci --no-audit --no-fund
       - run: npm test
+      - run: node bin/bellhaven-scrape.js --version
       - run: node bin/bellhaven-scrape.js --help
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --no-audit --no-fund
+      - run: npm install --no-save --package-lock=false playwright@1.57.0
+      - run: npx playwright install --with-deps chromium
+      - run: node scripts/browser-check.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-check
+          path: artifacts/

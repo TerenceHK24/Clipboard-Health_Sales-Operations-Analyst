@@ -1,0 +1,75 @@
+name: Verify CRM contract release
+on:
+  push:
+    branches: [fix/crm-contract-review-230]
+    paths: ['.review-upgrade/**', '.github/workflows/review-upgrade.yml', 'fixtures/http.js', 'test/contract.test.js', 'test/pipeline.test.js', 'scripts/browser-check.mjs']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: verify-crm-contract-release
+  cancel-in-progress: false
+jobs:
+  verify:
+    if: github.ref == 'refs/heads/fix/crm-contract-review-230'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/crm-contract-review-230
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Apply reviewed source changes
+        run: |
+          python3 .review-upgrade/core.py
+          python3 .review-upgrade/ui.py
+          git rm --ignore-unmatch scraper.py requirements.txt tests/test_scraper.py
+          mkdir -p artifacts
+      - name: Install and lock runtime dependencies
+        run: npm install --no-audit --no-fund
+      - name: Syntax, regression and full HTTP pipeline tests
+        shell: bash
+        run: |
+          set -o pipefail
+          find src bin public fixtures test scripts -name '*.js' -o -name '*.mjs' | while read -r file; do node --check "$file"; done
+          npm test 2>&1 | tee artifacts/tests.log
+          npm run test:core 2>&1 | tee artifacts/core-tests.log
+      - name: Verify packaged npx command
+        shell: bash
+        run: |
+          set -o pipefail
+          npm pack --json > artifacts/package.json
+          package_file="$GITHUB_WORKSPACE/$(node -p "JSON.parse(require('fs').readFileSync('artifacts/package.json'))[0].filename")"
+          cd "$(mktemp -d)"
+          npx --yes --package "$package_file" bellhaven-scrape --version | tee "$GITHUB_WORKSPACE/artifacts/package-version.txt"
+          npx --yes --package "$package_file" bellhaven-scrape --help > "$GITHUB_WORKSPACE/artifacts/package-help.txt"
+      - name: Install browser test tooling without runtime dependency changes
+        run: |
+          npm install --no-save --package-lock=false playwright@1.57.0
+          npx playwright install --with-deps chromium
+      - name: Verify the real review UI against synthetic HTTP data
+        shell: bash
+        run: |
+          set -o pipefail
+          node scripts/browser-check.mjs 2>&1 | tee artifacts/browser.log
+      - name: Credential-free public website smoke test
+        continue-on-error: true
+        run: node bin/bellhaven-scrape.js scrape --output artifacts/public-locations.csv --snapshot artifacts/public-snapshot.json
+      - name: Commit verified runtime and lockfile to the fix branch only
+        shell: bash
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src public bin test package.json package-lock.json
+          git diff --cached --check
+          git commit -m 'Fix CRM primary-key contract and verified review pipeline'
+          git push origin HEAD:refs/heads/fix/crm-contract-review-230
+          git rev-parse HEAD | tee artifacts/verified-commit.txt
+          git archive --format=zip HEAD -- bin src public fixtures test scripts config docs README.md package.json package-lock.json .gitignore .github/workflows/node-tests.yml > artifacts/Bellhaven_CRM_Review_App_2.3.0.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crm-contract-verification
+          path: artifacts/

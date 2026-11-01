@@ -1,103 +1,74 @@
-# Bellhaven | Public-Site & CRM Review
+# Bellhaven website / CRM review
 
-A cross-platform, approval-only Sales Operations reconciliation app. It dynamically discovers public facilities, extracts the corporate parent from the public footer, compares the entire CRM account inventory, and proposes specific reviewed actions. **Daily scans never write to the CRM.**
+A small Node.js app: discover public facilities and the corporate footer, compare the entire CRM, review evidence, and write only explicitly approved changes. No LLM, frontend framework, hosted service, Python runtime or saved CRM credential is required.
 
-## Requirements
+## Run
 
-- Node.js **22.16+**, npm/npx, Git, and network access. Supported on Windows, macOS, and Linux.
-- A CRM bearer token with access to the account/contact endpoints. **Never commit or paste your token into source, GitHub, or logs.**
-
-## One-command public scraper (no credential)
-
-Run in a terminal in the directory where you want the CSV:
+Requirements: Node.js **22.16+**, npm/npx, Git and internet access.
 
 ```sh
-npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scrape --output bellhaven_locations.csv
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst --version
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst review
 ```
 
-The CSV contains one `record_type=company` entry and all discovered `record_type=facility` entries. The corporate name and office address come from `footer`; a missing ZIP stays blank, not guessed. The scraper follows pagination plus community links on the homepage and `/about`, checks the advertised counts, and includes acquired facility brands. Optional `--snapshot public-snapshot.json` exports metadata and coverage details.
+Enter the CRM token at the **hidden terminal prompt on every launch**, open the private localhost URL printed in the terminal, and click **Run read-only scan**. The token stays in that process's memory. It is not accepted in a file, environment variable, browser form or CLI argument, and is not written to the database or logs.
 
-## CRM token: prompted every time, not stored
-
-**Do not create a token file.** Every time you start `scan` or `review`, the application requests the CRM bearer token directly in the terminal, with **input hidden**. Paste the token, then press Enter. The value stays in the running Node.js process only, is sent only as the `Authorization` header to the configured CRM API, and is not saved in `.env`, JSON, SQLite, CSV, logs, CLI arguments or shell history. Exit the process to end that authenticated session. A new process prompts again, even when you use the same state directory.
+If npm shows an older version, append `#<commit-sha>` to the GitHub package spec to run the exact reviewed commit. Do not delete your decision database or clear your entire npm cache. The dashboard displays its version.
 
 ```sh
-npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scan --data-dir ./bellhaven-state
-# Terminal: Enter CRM bearer token (input hidden):
+# Corporate row and all discovered facilities; no token needed.
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scrape --output locations.csv
+# Website + CRM comparison; prompts for token, never changes CRM.
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scan
+# Existing local journal; no credential needed.
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst status
+# Read-only rescans every 24 hours while this process stays open.
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst review --daily
 ```
 
-The `scan` command reads the public website and full CRM accounts and contacts via GET requests, then journals suggested changes. **It never writes to the CRM.** All account/contact data and decisions (but no token) are stored in local `review.sqlite`. Keep that directory private and backed up.
+Use the same persistent `--data-dir` across launches. By default it is under your home directory, outside npm's cache. Keep it private and backed up. Use a different directory for each CRM sandbox/person; do not share journals across tenants.
 
-To start the local reviewer:
+## Review screen
 
-```sh
-npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst review --data-dir ./bellhaven-state
-# Terminal: Enter CRM bearer token (input hidden):
-```
+Successful scans display the corporate name/address, website/account/contact counts, each facility's classification, and grouped proposals with exact before/after values and source links. Failed scans display **SCAN FAILED**, not “no inconsistencies.” Previous successful results are labelled stale and cannot be approved until a new successful scan.
 
-Open the **private loopback URL printed in the terminal**, e.g. `http://127.0.0.1:4310/#...`. The fragment is a randomly generated session key, **not your CRM token**. Click **Run read-only scan**, inspect public and CRM evidence and field-level changes, then explicitly Approve or Reject. Repeated issues are grouped with per-account details and group decisions. For unresolved identity, make a manual link, which does not write to CRM.
+Repeated corrections are grouped by change type, fields and decision status. Expand evidence, approve/reject an individual member, or decide the exact displayed group. Changed group membership blocks the batch before writing. Each target is rechecked, so stale members can be blocked while other members succeed. The API does not support a remote transaction for the whole group.
 
-To inspect the local journal without contacting CRM or entering a token:
+## Matching and safety rules
 
-```sh
-npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst status --data-dir ./bellhaven-state
-```
+- Discover same-origin directory pagination and homepage/about location links, including acquired brands with unrelated names. Compare advertised counts and detect large coverage drops. Parse the company from the footer; do not invent an unpublished ZIP.
+- Normalize API primary IDs at one boundary: `account_id` and `contact_id` become internal `id` for lists, detail reads, creation responses and patch responses. A contact's `account_id` remains its account relationship. Conflicting or malformed primary IDs abort; explicit custom mappings remain supported.
+- Follow `page` and `page_size` until the declared unique total is satisfied, or an empty page when no total is provided. Identical overlap requires a declared total and a second matching full read. Incomplete, conflicting or stalled pages abort instead of guessing page sizes or silently discarding rows.
+- Compare normalized names, locality, street and phone across every parent. Name identity tolerates punctuation and leading “The”; the official display name can still need correction. Address suffixes are normalized. Care aliases are configurable; `Memory Care` and `Memory Support` are equivalent.
+- Compare website administrators to CRM Administrator contacts. Propose creating/reactivating the correct person and marking superseded administrators Inactive. Preserve old identities, emails and phone numbers; never invent unpublished personal details. Ambiguous contacts require investigation.
+- When revenue history **and** outstanding AR are positive, create the new correct-parent account and change only the old account's `chow_current_account`. Preserve the old parent, name, finances, status, notes and contacts. Otherwise directly re-parent. Missing/invalid billing data blocks ownership changes.
+- Duplicate dispositions identify the survivor with `duplicate_of_account` and mark the losing copy Inactive. No merging, deletion or transfer of billing history. Co-location alone is not proof of a duplicate.
+- An account absent from the website is flagged Needs Review with evidence; absence alone does not establish closure or a new owner.
+- If all identifying fields changed, do not guess from care type. A reviewer can save a verified manual link and rescan; that link alone does not change the CRM.
 
-**Interactive-terminal requirement:** `scan` and `review` fail closed if started without a real terminal. The old `--env-file` flag has been removed; `CRM_TOKEN` in the environment is ignored. Do not put the token in any config file or shell command. No browser prompt or token storage is used. Running the public-only `scrape` command requires no token.
+## Approval, recovery and safe reruns
 
-**Persistent decisions across token changes:** the state is scoped to the website and CRM API URL, not the token. Always use the same `--data-dir`. For previously saved v2.1 journals using the old token-based scope, pass the old data directory and its original token once to migrate; after that, new tokens work with the same journal. If the original token is already revoked, preserve the old journal and arrange a controlled migration rather than deleting the decisions.
+SQLite stores evidence, decisions and per-step operations, not credentials. Unchanged decisions remain decided across runs and upgrades, even when an unrelated field changes. Full evidence and revision checks still prevent a stale browser from approving changed data.
 
-## CRM pagination errors and safe recovery
+Before writing, reread public evidence and affected CRM records, check financial gates, persist explicit approval, then POST/PATCH and read the result back. A group fetches public evidence once but still checks each CRM target. Scans never apply or resume writes.
 
-If a previous version stopped with `Missing/duplicate accounts IDs across pages`, that message combined two different problems. The current client distinguishes **missing account identifiers**, **repeated records within one API response**, and **overlap between pages**:
+Writes are not blindly retried. Account creates carry a deterministic operation note for recovery; uncertain outcomes stop instead of creating another record. Contact creates recover by the approved identity. Resuming an approved operation requires another explicit reviewer action. The API does not document conditional writes, idempotency keys or remote transactions, so no global race-free exactly-once guarantee is claimed. Rescan after applying a group to refresh dependent proposals.
 
-- For stable overlaps between pages, it collects distinct IDs and accepts the result **only when the API's advertised total is reached and a second full read matches the same records**.
-- When pagination is repeating or incomplete, it automatically retries read-only requests with alternative page sizes derived from the configured `pageSize`. A recovered snapshot is independently read again before use.
-- Missing/invalid IDs, conflicting records, duplicate IDs **inside one page**, inconsistent totals, and permanently incomplete pagination still stop the scan. The error now gives page/field/count diagnostics without showing record values or the bearer token.
-- When the API omits its total count, overlapping pages are not assumed complete; an alternative, clean pagination pass is required. The `scan` operation uses **GET only** and never creates or updates CRM accounts.
+## Configuration, scheduling and development
 
-If pagination cannot be verified, keep the last successful review snapshot and share only the **new sanitized error text** (never the token). To customize an unusual API pagination limit, supply a private, credential-free JSON configuration containing e.g. `{ "pageSize": 20 }` via `--config`. The app will still refuse an unverifiable snapshot rather than silently skipping CRM records.
+`--config config/example.json` overrides selectors, paths, field mappings, aliases and safety limits. Protocol/schema labels and general business rules are necessary contracts, not hard-coded facility answers. No real facility ID, address, count or personal token is embedded in runtime logic. Tests/fixtures are excluded from the installed runtime package.
 
-## Reconciliation rules
-
-- Public corporate parent is discovered from the footer; the CRM parent is identified from its normalized name, not a fixed account ID.
-- Public facility-to-CRM matching compares normalized street, city, state, name, and phone across **all** accounts, including those under a different parent. Ambiguous cases are flagged for review and cannot be silently created or re-parented.
-- Missing website facility: propose a new facility under the correct parent **only when no plausible CRM candidate exists**.
-- CRM child of Bellhaven absent from the public directory: propose `Needs Review` plus an explanatory note. **Never auto-close or delete** based on absence alone.
-- Duplicate candidates: propose `duplicate_of_account=<survivor ID>`, `status=Inactive`, and explanatory note on the losing record; preserve all billing history, contacts, and data. Never merge or delete.
-- Wrong parent **with `lifetime_revenue > 0` AND `outstanding_ar > 0`**: propose CHOW. After approval, create the current facility account under the correct parent and set **only** `chow_current_account` on the old account. Keep old parent, billing fields, name, status, notes and contacts unchanged.
-- Wrong parent when either numeric financial value is zero: propose direct re-parent of the existing record. Missing or invalid financial figures block ownership changes.
-- Administrator is verified against active CRM contacts (not facility-account fields). A missing/different administrator creates a separate approval-only **contact proposal**: create or reactivate the published administrator, then mark outdated administrator contacts Inactive. Never rename an unrelated person, change their email or phone, invent a new email, or modify historical non-administrator contacts. Ambiguous contact identity requires manual resolution. With CHOW, old contacts remain untouched; a follow-up scan proposes the new current account's administrator.
-- Care-type equivalence is configurable: **Memory Care** in CRM and **Memory Support** on the website mean the same category. Neither causes a false discrepancy. Additional equivalences may be configured without listing facilities.
-- The leading article and punctuation in a community name are ignored **for identity matching**, but canonical public spelling is still proposed as a name correction (e.g., initial “The” and a hyphen).
-- Exact global name matches can identify relocated or reparented facilities even when their city/state/phone changed. If **every identifying field differs except care type**, no defensible automatic identity match exists: reviewers can manually link a specific verified existing CRM account, which is saved to SQLite and triggers a new **read-only** scan. Linking is not CRM approval. The link must remain unchanged through approval.
-- Repeated discrepancies of the **same kind and field set** appear as **one review group**, with an account-by-account before/after preview, expandable evidence and a single explicit Approve All / Reject All action. The server rejects partial, stale or substituted group membership; each member is individually journaled. Group CHOW/reparent/duplicate actions carry a prominent financial/identity warning; failed members remain blocked for explicit retry.
-- Publicly missing fields are not used to erase existing CRM values. The footer has no published corporate ZIP, so none is invented.
-
-## Idempotence, verification and limitations
-
-- Proposals have deterministic IDs from source evidence and selected CRM fields. Re-scans reuse prior decisions; unchanged rejected/applied cases do not return to pending. Material evidence changes may yield a **new** proposal for fresh review.
-- A SQLite journal records every decision and write intent. Every approval rechecks website identity and fresh CRM data; writes are read back. Prior successful operations are recovered, not replayed. A uncertain POST is **not retried** unless its unique marker proves the previous create succeeded; otherwise manual intervention is needed.
-- POST/PATCH are never automatically retried. The API does not document an idempotency-key or conditional-update endpoint; the app fails closed if the outcome is uncertain or source data changes.
-- Strict completeness checks catch missing public pages, inconsistent directory counts, incomplete CRM pagination and abrupt location drops. Fully unlinked sites cannot be guaranteed.
-- Run only **one** reviewer/scan process against the same state directory; a local journal lock prevents parallel actions on one machine. For daily automation, use a single persistent host/data directory, **not ephemeral GitHub Actions runners**.
-
-## Daily schedule (configuration only)
-
-See [`docs/daily-schedule.md`](docs/daily-schedule.md). You can schedule **public-site-only** `scrape` daily with no token, but a daily CRM reconciliation cannot run unattended while requiring a fresh hidden token from a person each time. Run `scan` interactively when present. The example schedule is not installed or enabled.
-
-## Configuration and tests
-
-Site paths, selectors, API field names, timeout, pagination, coverage thresholds and port can be overridden with `--config path/to/config.json`; see [`config/example.json`](config/example.json). Examples are not location records; **no facility/account IDs are hard-coded**. Default host and generic HTML/API schema mappings live in `src/config.js`.
+See [daily scheduling](docs/daily-schedule.md) and [verification](docs/verification.md).
 
 ```sh
-git clone https://github.com/TerenceHK24/Clipboard-Health_Sales-Operations-Analyst.git
-cd Clipboard-Health_Sales-Operations-Analyst
-npm install
+npm ci
 npm test
-node bin/bellhaven-scrape.js --help
+npm run test:core
+npm pack
 ```
 
-Tests include synthetic examples based on the public Amberly Manor, Dayton and Akron record shapes, but they do **not** assert current CRM values. They use local mock data only and never access or mutate the live CRM. The CRM API's OpenAPI documentation does not specify contact request-body schemas, so production POST/PATCH contact compatibility must be checked in a credentialed sandbox before approval; failure is surfaced as blocked rather than silently retried. Live operation requires a valid token and host connectivity. API reference: https://analyst-assessment-production.up.railway.app/api/docs
+Tests include synthetic HTTP responses with API-style primary keys, the full HTML-to-review-to-approved-write pipeline, CHOW, contacts, grouping, retries, saved decisions and localhost security. Browser checks run the real UI against synthetic servers. Test definitions are not evidence of a pass: inspect the actual CI run and artifacts. No real CRM writes are made by the tests.
 
-**Important:** If a bearer token was shared in a conversation or another location, rotate/revoke it using the CRM controls and paste the replacement only into the hidden terminal prompt.
+## Assessment handoff
+
+The assessment requires a **corrected CRM**, not only code or an unapproved queue. Run the authenticated scan, review and approve justified changes, and verify their CRM end state. Record approximately two minutes showing evidence, one approval, one rejection, and the approved change in the CRM browser. Submit the repository, demo, honest time spent and short writeup. The app does not approve on the reviewer's behalf.
