@@ -1,0 +1,36 @@
+{
+  "siteUrl": "https://analyst-assessment-production.up.railway.app",
+  "apiUrl": "https://analyst-assessment-production.up.railway.app/api/v1/",
+  "seedPaths": ["/", "/communities", "/about"],
+  "directoryPath": "/communities",
+  "detailPath": "/communities/",
+  "delayMs": 200,
+  "pageSize": 50,
+  "timeoutMs": 25000,
+  "maxPages": 200,
+  "maxDropFraction": 0.2,
+  "port": 4310,
+  "selectors": {
+    "heading": "h1",
+    "footer": "footer",
+    "brand": "header a",
+    "details": "dl"
+  },
+  "fields": {
+    "id": "id",
+    "name": "name",
+    "parent": "parent_id",
+    "street": "billing_street",
+    "city": "billing_city",
+    "state": "billing_state",
+    "zip": "billing_zip",
+    "phone": "phone",
+    "care": "care_type",
+    "status": "status",
+    "note": "note",
+    "revenue": "lifetime_revenue",
+    "ar": "outstanding_ar",
+    "duplicate": "duplicate_of_account",
+    "chow": "chow_current_account"
+  }
+}
