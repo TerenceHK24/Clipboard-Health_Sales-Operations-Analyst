@@ -1,6 +1,6 @@
 /** Real UI against synthetic HTTP servers only. No live CRM token or writes. */
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
@@ -21,14 +21,21 @@ const status = text => page.locator('#scan-status').getByText(text, { exact: fal
 await mkdir('artifacts', { recursive: true });
 try {
   await page.goto(app.url); await status('NOT SCANNED').waitFor();
-  assert.equal(await page.locator('#version').innerText(), 'v2.3.0'); checks.push('Initial status and version.');
+  const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
+  assert.equal(await page.locator('#version').innerText(), `v${version}`); checks.push('Initial status and version.');
   api.flags.invalidId = true; await page.locator('#scan').click(); await status('SCAN FAILED').waitFor();
   assert.match(await page.locator('#scan-status').innerText(), /Zero proposals is not a finding/);
   await page.screenshot({ path: 'artifacts/scan-failed.png', fullPage: true });
   await page.reload(); await status('SCAN FAILED').waitFor(); checks.push('Failure persists across reload, not zero inconsistencies.');
   api.flags.invalidId = false; await page.locator('#scan').click(); await status('SCAN SUCCEEDED').waitFor();
   assert.match(await page.locator('#company').innerText(), /Example Senior Living/); assert.match(await page.locator('#company').innerText(), /ZIP not published/);
+  assert.match(await page.locator('#summary').innerText(), /Website \/ CRM Administrator differences/);
   await page.locator('#reviewer').fill('Browser QA');
+  await page.locator('#queue button').filter({ hasText: 'Administrator contact corrections' }).click();
+  assert.match(await page.locator('#detail').innerText(), /Administrator mismatch — approval required/);
+  assert.match(await page.locator('#detail').innerText(), /Website Administrator: Ada Example/);
+  assert.match(await page.locator('#detail').innerText(), /CRM active Administrator: Former Person/);
+  checks.push('Administrator mismatch displays public and CRM names with explicit approval actions.');
   await page.locator('#queue button').filter({ hasText: 'Repeated facility-field corrections' }).click();
   assert.match(await page.locator('#detail').innerText(), /2 proposed records/);
   assert.equal(await page.locator('#detail button').filter({ hasText: /^Approve and write to CRM$/ }).count(), 2);
@@ -51,6 +58,10 @@ try {
   await page.locator('summary').filter({ hasText: 'Matched facilities and read-only contact context' }).click();
   await page.locator('#matches summary').filter({ hasText: 'Facility North' }).click();
   assert.match(await page.locator('#matches').innerText(), /Same care category:/); checks.push('Care synonym is visible.');
+  await page.locator('#matches summary').filter({ hasText: 'Example Residence' }).click();
+  assert.match(await page.locator('#matches').innerText(), /Administrator: Approval required/);
+  assert.match(await page.locator('#matches').innerText(), /Former Person/);
+  checks.push('Read-only matched-account panel exposes Administrator discrepancy even after a rejected proposal.');
   api.flags.invalidId = true; await page.locator('#scan').click(); await status('SCAN FAILED').waitFor();
   assert.match(await page.locator('#scan-status').innerText(), /stale/);
   assert.equal(await page.getByRole('button', { name: 'Approve and write to CRM', exact: true }).isDisabled(), true); checks.push('Stale approval disabled after failed rescan.');
