@@ -2,7 +2,8 @@
 import { parseArgs } from 'node:util';
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { loadConfig } from '../src/config.js';
+import { loadConfig, hash } from '../src/config.js';
+import { promptForCrmToken } from '../src/credential.js';
 
 const usage = `Community discovery and approval-only CRM review
 
@@ -13,7 +14,6 @@ Commands:
   status    Print the last successful scan and decision counts
 
 Options:
-  --env-file FILE   Load a local environment file containing CRM_TOKEN
   --config FILE     Optional JSON configuration (no credentials)
   --data-dir DIR    Persistent decision/journal directory, shared with daily scan
   --base-url URL    Override the public website origin
@@ -24,27 +24,28 @@ Options:
   --port N          Local review port (default: 4310)
   -h, --help        Print this help
 
-CRM_TOKEN is read from the environment, never from a command-line argument.
-Node.js 22.16+ is required. Keep the same state directory for review and scheduled scans.
+CRM token is requested interactively on every scan/review launch, with hidden input.
+It is NEVER read from an env file, environment variable or command-line argument.
+Unattended scheduled CRM scans are disabled. Public-only scrape can run on a schedule.
+Node.js 22.16+ is required. Keep the same state directory for manual scan and review.
 `;
 
 async function main() {
   const [major, minor] = process.versions.node.split('.').map(Number);
   if (major < 22 || (major === 22 && minor < 16)) throw new Error('Install Node.js 22.16 or newer.');
   const { values, positionals } = parseArgs({ strict: true, allowPositionals: true, options: {
-    'env-file': { type: 'string' }, config: { type: 'string' }, 'data-dir': { type: 'string' },
+    config: { type: 'string' }, 'data-dir': { type: 'string' },
     'base-url': { type: 'string' }, 'api-url': { type: 'string' }, output: { type: 'string', short: 'o' },
     snapshot: { type: 'string' }, 'delay-ms': { type: 'string' }, port: { type: 'string' }, help: { type: 'boolean', short: 'h' },
   } });
   if (values.help) { console.log(usage); return; }
   const command = positionals[0] || 'scrape';
   if (positionals.length > 1 || !['scrape', 'scan', 'review', 'status'].includes(command)) throw new Error('Unknown command. Use --help.');
-  if (values['env-file']) process.loadEnvFile(resolve(values['env-file']));
   const overrides = {};
   for (const [flag, field] of [['base-url', 'siteUrl'], ['api-url', 'apiUrl'], ['data-dir', 'dataDir']]) if (values[flag]) overrides[field] = values[flag];
   if (values['delay-ms'] !== undefined) overrides.delayMs = Number(values['delay-ms']);
   if (values.port !== undefined) overrides.port = Number(values.port);
-  const { config, token, scope, dataDir } = await loadConfig(values.config, overrides);
+  const { config, scope, dataDir } = await loadConfig(values.config, overrides);
   if (command === 'scrape') {
     const { scrapeSnapshot, writeCsv } = await import('../src/scraper.js');
     const website = await scrapeSnapshot(config);
@@ -53,9 +54,11 @@ async function main() {
     if (values.snapshot) await writeFile(resolve(values.snapshot), JSON.stringify(website, null, 2) + '\n');
     console.log(`Saved 1 corporate office and ${website.locations.length} facilities to ${output}`); return;
   }
-  if (!token) throw new Error('Set CRM_TOKEN in your environment or use --env-file with a private local file. Do not put the token in GitHub.');
+  // `status` only reads an existing journal and needs no CRM credential.
+  const token = command === 'status' ? null : await promptForCrmToken();
   const { Store } = await import('../src/store.js');
-  const store = new Store(dataDir, scope);
+  const legacyScope = token ? hash(`${config.apiUrl}\n${config.siteUrl}\n${token}`) : undefined;
+  const store = new Store(dataDir, scope, { legacyScope });
   if (command === 'status') {
     try { console.log(JSON.stringify({ dataDir, lastScan: store.latest()?.summary || null,
       decisions: store.list().map(p => ({ id: p.id, title: p.title, status: p.status })) }, null, 2)); }
