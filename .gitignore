@@ -1,4 +1,15 @@
+.env
+.env.*
+!.env.example
+node_modules/
+*.csv
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+review-state/
+review.sqlite*
 __pycache__/
 *.py[cod]
 .venv/
-bellhaven_locations.csv
+.npm/
+*.log
