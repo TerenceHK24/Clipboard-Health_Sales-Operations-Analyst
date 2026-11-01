@@ -127,7 +127,7 @@ test('a second process/connection cannot overlap the journal lock', async t => {
   try { await c.store.withLock(async () => assert.rejects(other.withLock(async () => {}), /holds the local journal lock/)); }
   finally { other.close(); }
 });
-test('state cannot be reused silently with another tenant token scope', t => {
+test('state cannot be reused silently with another tenant API/site scope', t => {
   const c = setup(t);
   assert.throws(() => new Store(c.directory, 'another-tenant'), /different API/);
 });
