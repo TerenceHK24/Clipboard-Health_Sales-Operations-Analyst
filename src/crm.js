@@ -23,7 +23,7 @@ export function record(payload, idField = 'id') {
 /** GETs may retry; POST/PATCH never retry automatically. Credentials never follow redirects. */
 export class CrmClient {
   constructor(config, token, fetchImpl = fetch) {
-    if (!token || /[\r\n]/.test(token)) throw new Error('Set a valid CRM_TOKEN environment variable.');
+    if (!token || /[\r\n]/.test(token)) throw new Error('A nonempty, single-line CRM bearer token is required.');
     this.config = config;
     this.token = token;
     this.fetch = fetchImpl;
