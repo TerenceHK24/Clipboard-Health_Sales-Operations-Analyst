@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Community CRM Review</title><link rel="stylesheet" href="/styles.css"><script src="/app.js" defer></script></head>
+<body>
+<header><div><p class="eyebrow">SALES OPERATIONS · LOCAL WORKSPACE</p><h1>Community CRM Review</h1>
+<p>Public-site evidence. Human decisions. Auditable changes.</p></div>
+<div class="header-actions"><span class="pill">Approval required</span><button id="refresh" class="secondary">Refresh</button><button id="scan">Run read-only scan</button></div></header>
+<main>
+<div id="message" role="status" aria-live="polite"></div>
+<section id="summary" class="summary"></section>
+<section class="company" id="company"></section>
+<div class="toolbar"><label>Reviewer <input id="reviewer" placeholder="Name for the decision log" maxlength="100"></label>
+<label>Show <select id="filter"><option value="pending">Pending</option><option value="blocked">Blocked / resumable</option><option value="applied">Applied</option><option value="rejected">Rejected</option><option value="all">All decisions</option></select></label>
+<label class="search">Search <input id="search" type="search" placeholder="Facility, account ID, or change type"></label></div>
+<div class="workspace"><aside><h2>Review queue <span id="queue-count"></span></h2><div id="queue"></div></aside>
+<section id="detail" class="detail" aria-live="polite"><div class="empty"><h2>No proposal selected</h2><p>Run a scan to compare the website with your CRM. Scanning never writes to the CRM.</p></div></section></div>
+<details class="panel"><summary>Matched facilities and read-only contact context</summary><div id="matches"></div></details>
+<details class="panel"><summary>Coverage and items requiring investigation</summary><div id="notices"></div></details>
+<details class="panel"><summary>Persistent decision log</summary><div id="audit"></div></details>
+</main><footer>Local single-reviewer workspace. No automatic approvals, merges, deletions, billing transfers, or contact moves. Keep the state directory backed up.</footer>
+</body></html>
