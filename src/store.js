@@ -24,10 +24,21 @@ export class Store {
       CREATE TABLE IF NOT EXISTS operations(id TEXT PRIMARY KEY, proposal_id TEXT NOT NULL, step INTEGER NOT NULL,
         state TEXT NOT NULL, data TEXT NOT NULL, updated_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, at TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL);
-      CREATE TABLE IF NOT EXISTS locks(id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL, pid INTEGER NOT NULL, host TEXT NOT NULL);`);
+      CREATE TABLE IF NOT EXISTS locks(id INTEGER PRIMARY KEY CHECK(id=1), owner TEXT NOT NULL, pid INTEGER NOT NULL, host TEXT NOT NULL);
+      CREATE TABLE IF NOT EXISTS manual_matches(site_url TEXT PRIMARY KEY, account_id TEXT NOT NULL, reviewer TEXT NOT NULL, created_at TEXT NOT NULL);`);
     const existing = this.db.prepare('SELECT value FROM metadata WHERE key=?').get('scope');
     if (existing && existing.value !== scope) { this.db.close(); throw new Error('This state directory belongs to a different API/site/token scope. Use a separate directory.'); }
     this.db.prepare('INSERT OR IGNORE INTO metadata(key,value) VALUES(?,?)').run('scope', scope);
+  }
+  manualLinks() { return Object.fromEntries(this.db.prepare('SELECT site_url,account_id FROM manual_matches').all().map(row => [row.site_url, row.account_id])); }
+  link(siteUrl, accountId, reviewer) {
+    this.db.prepare('INSERT INTO manual_matches VALUES(?,?,?,?) ON CONFLICT(site_url) DO UPDATE SET account_id=excluded.account_id, reviewer=excluded.reviewer, created_at=excluded.created_at')
+      .run(siteUrl, accountId, reviewer, now());
+    this.recordRun('manual_match', { siteUrl, accountId, reviewer });
+  }
+  unlink(siteUrl, reviewer) {
+    this.db.prepare('DELETE FROM manual_matches WHERE site_url=?').run(siteUrl);
+    this.recordRun('manual_unmatch', { siteUrl, reviewer });
   }
   get(id) { return decode(this.db.prepare('SELECT * FROM proposals WHERE id=?').get(id)); }
   list() { return this.db.prepare('SELECT * FROM proposals ORDER BY first_seen DESC, id').all().map(decode); }
