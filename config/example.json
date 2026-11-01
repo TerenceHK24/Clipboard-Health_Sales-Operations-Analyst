@@ -1,7 +1,11 @@
 {
   "siteUrl": "https://analyst-assessment-production.up.railway.app",
   "apiUrl": "https://analyst-assessment-production.up.railway.app/api/v1/",
-  "seedPaths": ["/", "/communities", "/about"],
+  "seedPaths": [
+    "/",
+    "/communities",
+    "/about"
+  ],
   "directoryPath": "/communities",
   "detailPath": "/communities/",
   "delayMs": 200,
@@ -32,5 +36,20 @@
     "ar": "outstanding_ar",
     "duplicate": "duplicate_of_account",
     "chow": "chow_current_account"
-  }
+  },
+  "contactFields": {
+    "id": "id",
+    "account": "account_id",
+    "name": "name",
+    "title": "title",
+    "email": "email",
+    "phone": "phone",
+    "status": "status"
+  },
+  "careAliases": {
+    "memory care": "memory support"
+  },
+  "administratorTitles": [
+    "Administrator"
+  ]
 }
