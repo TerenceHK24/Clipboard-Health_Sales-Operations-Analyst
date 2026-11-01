@@ -4,6 +4,7 @@ import { PassThrough } from 'node:stream';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 import { promptForCrmToken } from '../src/credential.js';
 import { loadConfig, hash } from '../src/config.js';
@@ -82,9 +83,10 @@ test('an old token-based journal can be migrated once without recording token', 
 });
 
 test('old --env-file flag is rejected and help explains hidden prompt', () => {
-  const cli = new URL('../bin/bellhaven-scrape.js', import.meta.url).pathname;
+  // URL.pathname is not a Windows filename and leaves escaped spaces encoded.
+  const cli = fileURLToPath(new URL('../bin/bellhaven-scrape.js', import.meta.url));
   const help = spawnSync(process.execPath, [cli, '--help'], { encoding: 'utf8' });
-  assert.equal(help.status, 0);
+  assert.equal(help.status, 0, help.stderr || String(help.error || 'CLI help failed'));
   assert.match(help.stdout, /hidden input/);
   assert.doesNotMatch(help.stdout, /--env-file|CRM_TOKEN/);
   const legacy = spawnSync(process.execPath, [cli, 'scan', '--env-file', 'secrets.env'], { encoding: 'utf8' });
