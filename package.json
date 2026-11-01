@@ -1,0 +1,19 @@
+{
+  "name": "bellhaven-location-scraper",
+  "version": "1.0.0",
+  "description": "A cross-platform CLI for scraping Bellhaven community details into CSV",
+  "type": "module",
+  "bin": {
+    "bellhaven-scrape": "./bin/bellhaven-scrape.js"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "cheerio": "1.0.0"
+  },
+  "license": "MIT"
+}
