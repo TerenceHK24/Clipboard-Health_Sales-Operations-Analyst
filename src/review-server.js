@@ -15,7 +15,7 @@ async function jsonBody(request) {
   let size = 0; const chunks = [];
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 16384) throw new Error('Request body exceeds 16 KB.');
+    if (size > 131072) throw new Error('Request body exceeds 128 KB.');
     chunks.push(chunk);
   }
   const value = JSON.parse(Buffer.concat(chunks).toString('utf8'));
@@ -52,6 +52,14 @@ export async function startReviewServer(service, { port = 4310, fields = {} } = 
       if (request.method !== 'POST' || request.headers.origin !== origin) { send(403, { error: 'State changes require an authenticated same-origin POST.' }); return; }
       const body = await jsonBody(request);
       if (url.pathname === '/api/scan') { send(200, await service.scan()); return; }
+      if (url.pathname === '/api/groups/decision') {
+        const { groupKey, members, decision, reviewer, note } = body;
+        send(200, await service.decideGroup({ groupKey, members, decision, reviewer, note })); return;
+      }
+      if (url.pathname === '/api/manual-match') {
+        const { action, siteUrl, accountId, reviewer } = body;
+        send(200, await service.manualMatch({ action, siteUrl, accountId, reviewer })); return;
+      }
       const route = url.pathname.match(/^\/api\/proposals\/([a-f0-9]{64})\/decision$/);
       if (route) {
         // No client-supplied patch, account ID, endpoint, or token is accepted.
