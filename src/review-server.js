@@ -49,7 +49,7 @@ export async function startReviewServer(service, { port = 4310, fields = {} } = 
       }
       if (!authorized(request.headers['x-review-key'], key)) { send(401, { error: 'Open the private review URL printed in your terminal.' }); return; }
       if (request.headers.origin && request.headers.origin !== origin) { send(403, { error: 'Cross-origin access is not allowed.' }); return; }
-      if (request.method === 'GET' && url.pathname === '/api/state') { send(200, { ...service.view(), fields, contactFields: service.config.contactFields, administratorTitles: service.config.administratorTitles, version }); return; }
+      if (request.method === 'GET' && url.pathname === '/api/state') { send(200, { ...service.view(), fields, contactFields: service.config?.contactFields || null, administratorTitles: service.config?.administratorTitles || [], version }); return; }
       if (request.method !== 'POST' || request.headers.origin !== origin) { send(403, { error: 'State changes require an authenticated same-origin POST.' }); return; }
       const body = await jsonBody(request);
       if (url.pathname === '/api/scan') { send(200, await service.scan()); return; }
