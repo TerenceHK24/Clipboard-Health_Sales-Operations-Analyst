@@ -47,6 +47,17 @@ npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst status --
 
 **Persistent decisions across token changes:** the state is scoped to the website and CRM API URL, not the token. Always use the same `--data-dir`. For previously saved v2.1 journals using the old token-based scope, pass the old data directory and its original token once to migrate; after that, new tokens work with the same journal. If the original token is already revoked, preserve the old journal and arrange a controlled migration rather than deleting the decisions.
 
+## CRM pagination errors and safe recovery
+
+If a previous version stopped with `Missing/duplicate accounts IDs across pages`, that message combined two different problems. The current client distinguishes **missing account identifiers**, **repeated records within one API response**, and **overlap between pages**:
+
+- For stable overlaps between pages, it collects distinct IDs and accepts the result **only when the API's advertised total is reached and a second full read matches the same records**.
+- When pagination is repeating or incomplete, it automatically retries read-only requests with alternative page sizes derived from the configured `pageSize`. A recovered snapshot is independently read again before use.
+- Missing/invalid IDs, conflicting records, duplicate IDs **inside one page**, inconsistent totals, and permanently incomplete pagination still stop the scan. The error now gives page/field/count diagnostics without showing record values or the bearer token.
+- When the API omits its total count, overlapping pages are not assumed complete; an alternative, clean pagination pass is required. The `scan` operation uses **GET only** and never creates or updates CRM accounts.
+
+If pagination cannot be verified, keep the last successful review snapshot and share only the **new sanitized error text** (never the token). To customize an unusual API pagination limit, supply a private, credential-free JSON configuration containing e.g. `{ "pageSize": 20 }` via `--config`. The app will still refuse an unverifiable snapshot rather than silently skipping CRM records.
+
 ## Reconciliation rules
 
 - Public corporate parent is discovered from the footer; the CRM parent is identified from its normalized name, not a fixed account ID.
