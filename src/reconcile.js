@@ -109,32 +109,72 @@ function patchStep(account, body, config) {
 export function contactGuard(contact, config) {
   return Object.fromEntries(Object.values(config.contactFields).map(key => [key, contact[key] ?? null]));
 }
+const samePerson = (a, b) => normalize(a) === normalize(b);
+// Possible nickname/initial collision: never treat a similar name as confirmed identity.
+const plausibleSamePerson = (a, b) => {
+  const x = normalize(a).split(' ').filter(Boolean), y = normalize(b).split(' ').filter(Boolean);
+  return x.length >= 2 && y.length >= 2 && x.at(-1) === y.at(-1) &&
+    x[0][0] === y[0][0] && !samePerson(a, b);
+};
 const administratorContact = (contact, config) => config.administratorTitles
   .some(title => normalize(title) === normalize(contact[config.contactFields.title]));
-function administratorProposal(site, account, contacts, config) {
-  if (!site.administrator) return null;
-  const cf = config.contactFields, admins = contacts.filter(c => c[cf.account] === account[config.fields.id] && administratorContact(c, config));
-  const person = admins.filter(c => nameKey(c[cf.name]) === nameKey(site.administrator));
-  if (person.length > 1) return null; // identities are ambiguous; do not deactivate or create
-  const active = c => normalize(c[cf.status]) === 'active';
-  const alreadyCurrent = person.length === 1 && active(person[0]) && admins.filter(active).length === 1;
-  if (alreadyCurrent) return null;
-  const steps = [];
-  if (person.length === 1) {
-    if (!active(person[0])) steps.push({ resource: 'contacts', method: 'PATCH', id: person[0][cf.id], body: { [cf.status]: 'Active' } });
-  } else {
-    steps.push({ resource: 'contacts', method: 'POST', body: { [cf.account]: account[config.fields.id],
-      [cf.name]: site.administrator, [cf.title]: config.administratorTitles[0], [cf.status]: 'Active' } });
+const activeContact = (contact, config) => normalize(contact[config.contactFields.status]) === 'active';
+
+/** A visible, read-only result for every matched facility, including zero-difference cases.
+ * We do not infer an administrator when the public page omits one.
+ */
+export function administratorAssessment(site, contacts, config) {
+  const cf = config.contactFields;
+  const websiteName = text(site.administrator);
+  const admins = contacts.filter(c => administratorContact(c, config));
+  const activeAdmins = admins.filter(c => activeContact(c, config));
+  const activeNames = activeAdmins.map(c => text(c[cf.name]));
+  const base = { website: websiteName || null, crmActive: activeNames };
+  if (!websiteName) return { ...base, status: 'unavailable', message: 'Website administrator not published; do not guess.' };
+  if (activeAdmins.length === 1 && samePerson(activeAdmins[0][cf.name], websiteName)) {
+    return { ...base, status: 'matched', message: 'One active CRM Administrator matches the website.' };
   }
-  // Never overwrite an existing person's name, personal email or phone with an unrelated identity.
-  for (const contact of admins.filter(c => active(c) && nameKey(c[cf.name]) !== nameKey(site.administrator))) {
+  const matchingAdmins = admins.filter(c => samePerson(c[cf.name], websiteName));
+  const matchingPeople = contacts.filter(c => samePerson(c[cf.name], websiteName));
+  if (matchingAdmins.length > 1 || (matchingAdmins.length === 0 && matchingPeople.length > 1)) {
+    return { ...base, status: 'manual_review', message: 'Several CRM contacts match this name. Verify the identity before changing roles or status.' };
+  }
+  if (!matchingPeople.length && contacts.some(c => plausibleSamePerson(c[cf.name], websiteName))) {
+    return { ...base, status: 'manual_review', message: 'A CRM contact has a similar first initial and surname. Verify whether this is the same person before proposing a new contact.' };
+  }
+  return { ...base, status: 'approval_required', message: 'Website and current CRM administrator do not match. A contact change needs approval.' };
+}
+function administratorProposal(site, account, contacts, config) {
+  if (administratorAssessment(site, contacts, config).status !== 'approval_required') return null;
+  const cf = config.contactFields, admins = contacts.filter(c => administratorContact(c, config));
+  const matches = contacts.filter(c => samePerson(c[cf.name], site.administrator));
+  const target = matches.find(c => administratorContact(c, config)) || matches[0];
+  const steps = [];
+  if (target) {
+    const body = {};
+    // Reuse the verified person rather than creating a duplicate or overwriting their identity.
+    if (!administratorContact(target, config)) body[cf.title] = config.administratorTitles[0];
+    if (!activeContact(target, config)) body[cf.status] = 'Active';
+    if (Object.keys(body).length) steps.push({ resource: 'contacts', method: 'PATCH', id: target[cf.id], body });
+  } else {
+    steps.push({ resource: 'contacts', method: 'POST', body: {
+      [cf.account]: account[config.fields.id], [cf.name]: site.administrator,
+      [cf.title]: config.administratorTitles[0], [cf.status]: 'Active',
+    } });
+  }
+  // An obsolete Administrator's identity/email/phone is never changed; only active status.
+  for (const contact of admins.filter(c => activeContact(c, config) && c[cf.id] !== target?.[cf.id])) {
     steps.push({ resource: 'contacts', method: 'PATCH', id: contact[cf.id], body: { [cf.status]: 'Inactive' } });
   }
   if (!steps.length) return null;
-  return proposal(`admin:${site.source_url}:${account[config.fields.id]}`, 'admin_contact',
-    `Reconcile administrator for ${site.name}`, site, [account], steps,
-    'Create or reactivate the website administrator, then mark superseded administrator contacts Inactive. Existing contact identities, emails and phones are preserved; no personal details are invented.',
-    config, admins, admins);
+  const current = admins.filter(c => activeContact(c, config)).map(c => text(c[cf.name])).join(' / ') || '(none)';
+  const checked = [...new Map([...admins, ...(target ? [target] : [])].map(c => [c[cf.id], c])).values()];
+  return proposal('admin:' + site.source_url + ':' + account[config.fields.id], 'admin_contact',
+    'Administrator mismatch: ' + site.name, site, [account], steps,
+    'Website: ' + text(site.administrator) + '. CRM active Administrator: ' + current +
+      '. Approval will ' + (target ? 'reuse the existing person' : 'create a contact for the published person') +
+      ', then inactivate obsolete active Administrator records. Contact names, emails and phones are preserved.',
+    config, checked, checked);
 }
 
 export function validateAccounts(accounts, config) {
@@ -210,7 +250,7 @@ export function plan(snapshot, config, { manualLinks = {} } = {}) {
     if (item.kind === 'matched' && [item.account, ...item.duplicates].some(a => claims.get(a[f.id]) > 1)) item.kind = 'ambiguous';
     if (item.kind === 'invalid_manual_link') {
       notices.push(`${site.name}: the verified manual account link no longer points to an eligible account. Remove or correct it before making changes.`);
-      matches.push({ name: site.name, result: 'Manual match must be rechecked', source_url: site.source_url });
+      matches.push({ name: site.name, result: 'Manual match must be rechecked', source_url: site.source_url, administratorCheck: { website: site.administrator || null, crmActive: [], status: 'deferred', message: 'Facility identity must be verified before comparing contacts.' } });
       continue;
     }
     if (item.kind === 'ambiguous') {
@@ -223,14 +263,14 @@ export function plan(snapshot, config, { manualLinks = {} } = {}) {
           `ambiguous:${site.source_url}:${account[f.id]}`, 'flag_ambiguous', `Review identity: ${account[f.name]}`, site,
           [account], [patchStep(account, body, config)], 'Approval only flags this account. It does not assert a match or change its parent.', config));
       }
-      matches.push({ name: site.name, result: 'Ambiguous', source_url: site.source_url });
+      matches.push({ name: site.name, result: 'Ambiguous', source_url: site.source_url, administratorCheck: { website: site.administrator || null, crmActive: [], status: 'deferred', message: 'Facility identity is ambiguous; do not change contacts.' } });
       continue;
     }
     if (item.kind === 'new') {
       const body = { ...desiredFields(site, config), [f.parent]: parentId, [f.status]: 'Active' };
       proposals.push(proposal(`create:${site.source_url}`, 'create', `Create ${site.name}`, site, [parent],
         [{ method: 'POST', body }], 'No candidate was found across the complete CRM account inventory, including other parents.', config));
-      matches.push({ name: site.name, result: 'Missing CRM account', source_url: site.source_url });
+      matches.push({ name: site.name, result: 'Missing CRM account', source_url: site.source_url, administratorCheck: { website: site.administrator || null, crmActive: [], status: 'deferred', message: 'Create and verify the facility account first, then propose an administrator contact separately.' } });
       continue;
     }
     const account = item.account, accountId = account[f.id];
@@ -241,7 +281,7 @@ export function plan(snapshot, config, { manualLinks = {} } = {}) {
     const financialGate = needsChow(account, config);
     if (wrongParent && financialGate === null) {
       notices.push(`${site.name}: billing values are missing/invalid; ownership changes are blocked.`);
-      matches.push({ name: site.name, result: 'Blocked: invalid billing data', account_id: accountId, source_url: site.source_url });
+      matches.push({ name: site.name, result: 'Blocked: invalid billing data', account_id: accountId, source_url: site.source_url, administratorCheck: { website: site.administrator || null, crmActive: [], status: 'deferred', message: 'Resolve billing/ownership before contact changes.' } });
       continue;
     }
     if (wrongParent && financialGate) {
@@ -272,22 +312,32 @@ export function plan(snapshot, config, { manualLinks = {} } = {}) {
         [loser, account], [patchStep(loser, body, config)], 'Same normalized address and matching identity/care evidence under the same parent. The survivor is selected using receivables and revenue history. Review all evidence before approval.', config,
         contacts.filter(contact => [loser[f.id], accountId].includes(contact[config.contactFields.account]))));
     }
+
     const admins = accountContacts.filter(c => administratorContact(c, config));
-    if (site.administrator && admins.filter(c => nameKey(c[config.contactFields.name]) === nameKey(site.administrator)).length > 1) {
-      notices.push(`${site.name}: multiple administrator contacts have the website person's name; resolve manually, no contact change proposed.`);
-    } else if (wrongParent && financialGate) {
-      if (site.administrator) notices.push(`${site.name}: reconcile administrator after CHOW account is created; old contacts must remain untouched.`);
+    let administratorCheck = administratorAssessment(site, accountContacts, config);
+    if (wrongParent && financialGate) {
+      if (site.administrator) notices.push(site.name + ': administrator must be reconciled on the new current account after CHOW; old contacts are untouched.');
+      administratorCheck = { ...administratorCheck, status: 'deferred', message: 'CHOW: old contacts must remain unchanged. Recheck the new account after approved creation.' };
     } else if (account[f.status] === 'Inactive') {
-      if (site.administrator) notices.push(`${site.name}: administrator change deferred until the inactive facility's status is reviewed.`);
-    } else {
+      if (site.administrator) notices.push(site.name + ': administrator change deferred until the inactive facility status is reviewed.');
+      administratorCheck = { ...administratorCheck, status: 'deferred', message: 'Facility is Inactive. Review account status before changing Administrator.' };
+    } else if (administratorCheck.status === 'manual_review') {
+      notices.push(site.name + ': administrator identity needs manual verification (duplicate or potentially equivalent name); no automatic contact change is proposed.');
+    } else if (administratorCheck.status === 'approval_required') {
       const contactChange = administratorProposal(site, account, accountContacts, config);
       if (contactChange) proposals.push(contactChange);
     }
     const equivalentCare = Boolean(site.care_offerings && account[f.care] &&
       normalize(site.care_offerings) !== normalize(account[f.care]) &&
       careKey(site.care_offerings, config) === careKey(account[f.care], config));
-    matches.push({ name: site.name, result: wrongParent ? (financialGate ? 'CHOW required' : 'Wrong parent')
-      : Object.keys(patch).length ? 'Field differences' : equivalentCare ? 'Matched (care synonym)' : 'Matched',
+
+    const accountResult = wrongParent ? (financialGate ? 'CHOW required' : 'Wrong parent')
+      : Object.keys(patch).length ? 'Field differences' : equivalentCare ? 'Matched (care synonym)' : 'Matched';
+    const administratorResult = administratorCheck.status === 'approval_required' ? 'Administrator approval required'
+      : administratorCheck.status === 'manual_review' ? 'Administrator manual review' : null;
+    matches.push({ name: site.name, result: administratorResult && accountResult.startsWith('Matched')
+      ? administratorResult : administratorResult ? accountResult + '; ' + administratorResult : accountResult,
+      administratorCheck,
       careEquivalent: equivalentCare ? { website: site.care_offerings, crm: account[f.care] } : null,
       websiteAdministrator: site.administrator, crmAdministrators: admins.map(c => ({ name: c[config.contactFields.name],
         status: c[config.contactFields.status], title: c[config.contactFields.title] })),
