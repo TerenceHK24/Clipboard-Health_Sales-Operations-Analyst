@@ -222,6 +222,21 @@ export class ReviewService {
       if (found.length === 1) createdId = found[0][f.id];
     }
     await this.verifyGuards(item, createdId);
+    // Before the first contact write, also detect new/removed administrator records.
+    // Individual record guards alone cannot detect another administrator added after scanning.
+    if (item.kind === 'admin_contact' && !item.steps.some((_, index) => this.store.operation(hash(`${item.id}:${index}`)))) {
+      const cf = this.config.contactFields;
+      const accountId = item.evidence.accounts[0][f.id];
+      const relevant = (await this.client.list('contacts')).filter(contact =>
+        contact[cf.account] === accountId &&
+        (this.config.administratorTitles.some(title => normalize(contact[cf.title]) === normalize(title)) ||
+          normalize(contact[cf.name]) === normalize(item.website.administrator)));
+      const keys = rows => rows.map(row => contactGuard(row, this.config))
+        .sort((a, b) => String(a[cf.id]).localeCompare(String(b[cf.id])));
+      if (stable(keys(relevant)) !== stable(keys(item.evidence.contacts))) {
+        throw new Error('CRM administrator roster changed since scanning. No contact changes were written; rescan and review.');
+      }
+    }
     for (const [index, step] of item.steps.entries()) {
       const opId = hash(`${item.id}:${index}`);
       const operation = this.store.operation(opId);
@@ -291,6 +306,16 @@ export class ReviewService {
         }
       } else throw new Error('Only POST and PATCH operations are permitted after approval.');
     }
+    if (item.kind === 'admin_contact') {
+      const cf = this.config.contactFields;
+      const accountId = item.evidence.accounts[0][f.id];
+      const activeAdmins = (await this.client.list('contacts')).filter(contact =>
+        contact[cf.account] === accountId && normalize(contact[cf.status]) === 'active' &&
+        this.config.administratorTitles.some(title => normalize(contact[cf.title]) === normalize(title)));
+      if (activeAdmins.length !== 1 || normalize(activeAdmins[0][cf.name]) !== normalize(item.website.administrator)) {
+        throw new Error('CRM administrator did not match the website after the approved contact operations. No additional changes will be attempted; inspect and rescan.');
+      }
+    }
   }
   async applyContactStep(item, step, body, index, opId, operation) {
     const cf = this.config.contactFields;
@@ -305,9 +330,10 @@ export class ReviewService {
         body[cf.account] !== accountId || body[cf.name] !== item.website.administrator ||
         !this.config.administratorTitles.some(title => normalize(title) === normalize(body[cf.title])) ||
         body[cf.status] !== 'Active') throw new Error('Only a website-verified administrator contact can be created.');
-      const candidates = admins.filter(c => nameKey(c[cf.name]) === nameKey(body[cf.name]));
-      if (candidates.length > 1) throw new Error('Multiple matching administrator contacts; manual review required.');
-      if (!operation && candidates.length) throw new Error('An administrator contact appeared since the scan; a fresh review is required.');
+      // Matching people with OTHER job titles must also block an unexpected new POST.
+      const candidates = existing.filter(c => c[cf.account] === accountId && normalize(c[cf.name]) === normalize(body[cf.name]));
+      if (candidates.length > 1) throw new Error('Multiple matching CRM contacts; manual review required.');
+      if (!operation && candidates.length) throw new Error('A matching person appeared since the scan; refresh the review rather than creating a duplicate.');
       let created = candidates[0];
       if (!created && operation) throw new Error('Previous contact create outcome is uncertain. No second POST was sent; check the CRM manually.');
       if (!created) {
@@ -325,12 +351,21 @@ export class ReviewService {
       this.store.saveOperation(opId, item.id, index, 'applied', { resource: 'contacts', method: 'POST', body, createdId: created[cf.id] });
       return;
     }
-    if (step.method !== 'PATCH' || Object.keys(body).length !== 1 || !['Active', 'Inactive'].includes(body[cf.status])) throw new Error('Administrator existing contacts may only change status.');
+    const fields = Object.keys(body);
+    if (step.method !== 'PATCH' || !fields.length || fields.some(key => ![cf.status, cf.title].includes(key)) ||
+        (body[cf.status] && !['Active', 'Inactive'].includes(body[cf.status]))) {
+      throw new Error('Administrator updates may only change the explicitly approved title and/or status.');
+    }
     const check = item.contactGuards.find(c => c.id === step.id);
-    if (!check || check.before[cf.account] !== accountId ||
-        !this.config.administratorTitles.some(title => normalize(title) === normalize(check.before[cf.title]))) throw new Error('Unapproved administrator contact target.');
-    if (body[cf.status] === 'Active' && nameKey(check.before[cf.name]) !== nameKey(item.website.administrator)) throw new Error('Cannot reactivate a different person.');
-    if (body[cf.status] === 'Inactive' && nameKey(check.before[cf.name]) === nameKey(item.website.administrator)) throw new Error('Cannot deactivate the current website administrator.');
+    if (!check || check.before[cf.account] !== accountId) throw new Error('Unapproved administrator contact target.');
+    const sameWebsitePerson = normalize(check.before[cf.name]) === normalize(item.website.administrator);
+    const originalAdministrator = this.config.administratorTitles.some(title => normalize(title) === normalize(check.before[cf.title]));
+    if (!originalAdministrator && !sameWebsitePerson) throw new Error('Cannot change an unrelated CRM contact.');
+    if (Object.hasOwn(body, cf.title) && (!sameWebsitePerson || !this.config.administratorTitles.some(title => normalize(title) === normalize(body[cf.title])))) {
+      throw new Error('Only the website-verified person can receive the Administrator title.');
+    }
+    if (body[cf.status] === 'Active' && !sameWebsitePerson) throw new Error('Cannot activate a different person.');
+    if (body[cf.status] === 'Inactive' && sameWebsitePerson) throw new Error('Cannot deactivate the current website administrator.');
     const current = await this.client.getContact(step.id);
     if (matches(current, body)) {
       if (stable(contactGuard(current,this.config)) !== stable({ ...check.before, ...body })) throw new Error('Contact identity or other fields changed since approval.');
