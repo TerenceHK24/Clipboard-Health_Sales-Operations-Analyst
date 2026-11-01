@@ -1,48 +1,83 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { scrapeAll, writeCsv, DEFAULT_BASE_URL } from '../src/scraper.js';
+import { writeFile } from 'node:fs/promises';
+import { resolve } from 'node:path';
+import { loadConfig } from '../src/config.js';
 
-const usage = `Bellhaven community scraper
+const usage = `Community discovery and approval-only CRM review
 
-Usage:
-  npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst
-  npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst --output locations.csv
+Commands:
+  scrape    Export the corporate office and all public facilities (default; no token needed)
+  scan      Read website + CRM and persist proposals; NEVER applies changes
+  review    Start the local reviewer app; writes require an explicit decision in the browser
+  status    Print the last successful scan and decision counts
 
 Options:
-  -o, --output FILE      CSV destination (default: bellhaven_locations.csv)
-      --base-url URL     Website origin (default: ${DEFAULT_BASE_URL})
-      --delay-ms MS      Delay between requests (default: 200)
-  -h, --help             Show this help
+  --env-file FILE   Load a local environment file containing CRM_TOKEN
+  --config FILE     Optional JSON configuration (no credentials)
+  --data-dir DIR    Persistent decision/journal directory, shared with daily scan
+  --base-url URL    Override the public website origin
+  --api-url URL     Override the CRM API base URL
+  -o, --output FILE CSV output (default: bellhaven_locations.csv)
+  --snapshot FILE  Also export the public website snapshot as JSON (scrape only)
+  --delay-ms N      Public-site request delay (default: 200)
+  --port N          Local review port (default: 4310)
+  -h, --help        Print this help
+
+CRM_TOKEN is read from the environment, never from a command-line argument.
+Node.js 22.16+ is required. Keep the same state directory for review and scheduled scans.
 `;
 
 async function main() {
-  const { values } = parseArgs({
-    options: {
-      output: { type: 'string', short: 'o' },
-      'base-url': { type: 'string' },
-      'delay-ms': { type: 'string' },
-      help: { type: 'boolean', short: 'h' },
-    },
-    strict: true,
-  });
-  if (values.help) {
-    console.log(usage);
+  const [major, minor] = process.versions.node.split('.').map(Number);
+  if (major < 22 || (major === 22 && minor < 16)) throw new Error('Install Node.js 22.16 or newer.');
+  const { values, positionals } = parseArgs({ strict: true, allowPositionals: true, options: {
+    'env-file': { type: 'string' }, config: { type: 'string' }, 'data-dir': { type: 'string' },
+    'base-url': { type: 'string' }, 'api-url': { type: 'string' }, output: { type: 'string', short: 'o' },
+    snapshot: { type: 'string' }, 'delay-ms': { type: 'string' }, port: { type: 'string' }, help: { type: 'boolean', short: 'h' },
+  } });
+  if (values.help) { console.log(usage); return; }
+  const command = positionals[0] || 'scrape';
+  if (positionals.length > 1 || !['scrape', 'scan', 'review', 'status'].includes(command)) throw new Error('Unknown command. Use --help.');
+  if (values['env-file']) process.loadEnvFile(resolve(values['env-file']));
+  const overrides = {};
+  for (const [flag, field] of [['base-url', 'siteUrl'], ['api-url', 'apiUrl'], ['data-dir', 'dataDir']]) if (values[flag]) overrides[field] = values[flag];
+  if (values['delay-ms'] !== undefined) overrides.delayMs = Number(values['delay-ms']);
+  if (values.port !== undefined) overrides.port = Number(values.port);
+  const { config, token, scope, dataDir } = await loadConfig(values.config, overrides);
+  if (command === 'scrape') {
+    const { scrapeSnapshot, writeCsv } = await import('../src/scraper.js');
+    const website = await scrapeSnapshot(config);
+    const output = resolve(values.output || 'bellhaven_locations.csv');
+    await writeCsv([website.company, ...website.locations], output);
+    if (values.snapshot) await writeFile(resolve(values.snapshot), JSON.stringify(website, null, 2) + '\n');
+    console.log(`Saved 1 corporate office and ${website.locations.length} facilities to ${output}`); return;
+  }
+  if (!token) throw new Error('Set CRM_TOKEN in your environment or use --env-file with a private local file. Do not put the token in GitHub.');
+  const { Store } = await import('../src/store.js');
+  const store = new Store(dataDir, scope);
+  if (command === 'status') {
+    try { console.log(JSON.stringify({ dataDir, lastScan: store.latest()?.summary || null,
+      decisions: store.list().map(p => ({ id: p.id, title: p.title, status: p.status })) }, null, 2)); }
+    finally { store.close(); }
     return;
   }
-  const delayMs = values['delay-ms'] === undefined ? 200 : Number(values['delay-ms']);
-  if (!Number.isFinite(delayMs) || delayMs < 0) {
-    throw new Error('--delay-ms must be a nonnegative number.');
+  const { CrmClient } = await import('../src/crm.js');
+  const { ReviewService } = await import('../src/service.js');
+  const readWebsite = async () => (await import('../src/scraper.js')).scrapeSnapshot(config);
+  const service = new ReviewService({ config, store, client: new CrmClient(config, token), readWebsite });
+  if (command === 'scan') {
+    try { console.log(JSON.stringify(await service.scan(), null, 2)); }
+    finally { store.close(); }
+    return;
   }
-  const output = values.output ?? 'bellhaven_locations.csv';
-  const rows = await scrapeAll({
-    baseUrl: values['base-url'] ?? DEFAULT_BASE_URL,
-    delayMs,
-  });
-  await writeCsv(rows, output);
-  console.log(`Saved ${rows.length} Bellhaven communities to ${output}`);
+  try {
+    const { startReviewServer } = await import('../src/review-server.js');
+    const app = await startReviewServer(service, { port: config.port, fields: config.fields });
+    console.log(`State: ${dataDir}\nOpen this private local URL:\n${app.url}\nNo CRM writes occur until you approve a proposal. Press Ctrl+C to stop.`);
+    let closing = false;
+    const stop = async () => { if (closing) return; closing = true; await app.close(); store.close(); };
+    process.once('SIGINT', stop); process.once('SIGTERM', stop);
+  } catch (error) { store.close(); throw error; }
 }
-
-main().catch(error => {
-  console.error(`Scraper failed: ${error.message}`);
-  process.exitCode = 1;
-});
+main().catch(error => { console.error(`Error: ${error.message}`); process.exitCode = 1; });
