@@ -1,6 +1,6 @@
 {
   "name": "bellhaven-location-scraper",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "Dynamic public-site discovery and approval-only CRM reconciliation",
   "type": "module",
   "bin": {
