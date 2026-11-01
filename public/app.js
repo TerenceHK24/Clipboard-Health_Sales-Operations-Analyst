@@ -125,7 +125,7 @@ function renderDetail(item, detail = $('detail'), insideGroup = false) {
   detail.append(element('span', label(item.status), `pill ${item.status}`), element('h2', item.title), element('p', item.reason));
   if (item.kind === 'chow') detail.append(element('div', 'CHOW safeguard: create a new current account first. The old account keeps its parent, status, name, note, revenue, AR, and contacts. Only its current-account link changes.', 'warning'));
   if (item.kind === 'admin_contact') {
-    const cf = state.contactFields;
+    const cf = state.contactFields || { name: 'name', status: 'status', title: 'title' };
     const titles = state.administratorTitles || [];
     const administrators = item.evidence.contacts.filter(c => titles.some(title =>
       normalizeContactText(title) === normalizeContactText(c[cf.title])) &&
