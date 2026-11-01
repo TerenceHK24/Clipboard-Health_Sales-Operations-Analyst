@@ -1,25 +1,31 @@
-name: Node scraper tests
+name: Tests (no live CRM access)
 on:
   push:
     paths:
       - 'src/**'
       - 'bin/**'
+      - 'public/**'
+      - 'fixtures/**'
       - 'test/**'
       - 'package.json'
+      - 'package-lock.json'
       - '.github/workflows/node-tests.yml'
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   test:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: ['20', '22']
+        node: ['22', '24']
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: ${{ matrix.node-version }}
+          node-version: ${{ matrix.node }}
+          cache: npm
       - run: npm install --no-audit --no-fund
       - run: npm test
       - run: node bin/bellhaven-scrape.js --help
