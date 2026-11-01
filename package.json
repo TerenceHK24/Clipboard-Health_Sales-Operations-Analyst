@@ -1,19 +1,16 @@
 {
   "name": "bellhaven-location-scraper",
-  "version": "1.0.0",
-  "description": "A cross-platform CLI for scraping Bellhaven community details into CSV",
+  "version": "2.0.0",
+  "description": "Dynamic public-site discovery and approval-only CRM reconciliation",
   "type": "module",
-  "bin": {
-    "bellhaven-scrape": "./bin/bellhaven-scrape.js"
-  },
+  "bin": { "bellhaven-scrape": "./bin/bellhaven-scrape.js" },
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/reconcile.test.js test/service.test.js test/crm.test.js test/server.test.js test/scraper.test.js",
+    "test:core": "node --test test/reconcile.test.js test/service.test.js test/crm.test.js test/server.test.js",
+    "start": "node bin/bellhaven-scrape.js review"
   },
-  "engines": {
-    "node": ">=20.0.0"
-  },
-  "dependencies": {
-    "cheerio": "1.0.0"
-  },
+  "engines": { "node": ">=22.16.0" },
+  "dependencies": { "cheerio": "1.0.0" },
+  "files": ["bin", "src", "public", "config", "docs", "README.md", ".env.example"],
   "license": "MIT"
 }
