@@ -24,6 +24,9 @@ export const DEFAULTS = Object.freeze({
     revenue: 'lifetime_revenue', ar: 'outstanding_ar',
     duplicate: 'duplicate_of_account', chow: 'chow_current_account',
   },
+  contactFields: { id: 'id', account: 'account_id', name: 'name', title: 'title', email: 'email', phone: 'phone', status: 'status' },
+  careAliases: { 'memory care': 'memory support' },
+  administratorTitles: ['Administrator'],
 });
 
 export function hash(value) {
@@ -41,7 +44,10 @@ export function stable(value) {
 export function makeConfig(overrides = {}) {
   const config = { ...DEFAULTS, ...overrides,
     fields: { ...DEFAULTS.fields, ...overrides.fields },
-    selectors: { ...DEFAULTS.selectors, ...overrides.selectors } };
+    selectors: { ...DEFAULTS.selectors, ...overrides.selectors },
+    contactFields: { ...DEFAULTS.contactFields, ...overrides.contactFields },
+    careAliases: { ...DEFAULTS.careAliases, ...overrides.careAliases },
+    administratorTitles: overrides.administratorTitles || DEFAULTS.administratorTitles };
   for (const key of ['siteUrl', 'apiUrl']) {
     const url = new URL(config[key]);
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
@@ -64,6 +70,9 @@ export function makeConfig(overrides = {}) {
       throw new Error('Website paths must be same-origin absolute paths.');
     }
   }
+  if (!Array.isArray(config.administratorTitles) || !config.administratorTitles.every(x => typeof x === 'string' && x.trim())) throw new Error('administratorTitles must contain nonempty labels.');
+  if (!config.careAliases || Object.entries(config.careAliases).some(([key,value]) => !key || typeof value !== 'string' || !value)) throw new Error('careAliases must map strings to strings.');
+  if (Object.values(config.contactFields).some(value => typeof value !== 'string' || !value) || new Set(Object.values(config.contactFields)).size !== Object.values(config.contactFields).length) throw new Error('Invalid contactFields mapping.');
   if (new Set(Object.values(config.fields)).size !== Object.keys(config.fields).length ||
       Object.values(config.fields).some(value => typeof value !== 'string' || !value)) {
     throw new Error('CRM field mappings must be distinct, nonempty strings.');
