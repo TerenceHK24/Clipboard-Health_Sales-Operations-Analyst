@@ -17,15 +17,16 @@ const service = new ReviewService({ config: api.config, client: new CrmClient(ap
 const app = await startReviewServer(service, { port: 0, fields: api.config.fields });
 const browser = await chromium.launch(), page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const errors = [], checks = []; page.on('pageerror', error => errors.push(error.message));
+const status = text => page.locator('#scan-status').getByText(text, { exact: false });
 await mkdir('artifacts', { recursive: true });
 try {
-  await page.goto(app.url); await page.getByText('NOT SCANNED', { exact: false }).waitFor();
+  await page.goto(app.url); await status('NOT SCANNED').waitFor();
   assert.equal(await page.locator('#version').innerText(), 'v2.3.0'); checks.push('Initial status and version.');
-  api.flags.invalidId = true; await page.locator('#scan').click(); await page.getByText('SCAN FAILED', { exact: false }).waitFor();
+  api.flags.invalidId = true; await page.locator('#scan').click(); await status('SCAN FAILED').waitFor();
   assert.match(await page.locator('#scan-status').innerText(), /Zero proposals is not a finding/);
   await page.screenshot({ path: 'artifacts/scan-failed.png', fullPage: true });
-  await page.reload(); await page.getByText('SCAN FAILED', { exact: false }).waitFor(); checks.push('Failure persists across reload, not zero inconsistencies.');
-  api.flags.invalidId = false; await page.locator('#scan').click(); await page.getByText('SCAN SUCCEEDED', { exact: false }).waitFor();
+  await page.reload(); await status('SCAN FAILED').waitFor(); checks.push('Failure persists across reload, not zero inconsistencies.');
+  api.flags.invalidId = false; await page.locator('#scan').click(); await status('SCAN SUCCEEDED').waitFor();
   assert.match(await page.locator('#company').innerText(), /Example Senior Living/); assert.match(await page.locator('#company').innerText(), /ZIP not published/);
   await page.locator('#reviewer').fill('Browser QA');
   await page.locator('#queue button').filter({ hasText: 'Repeated facility-field corrections' }).click();
@@ -50,7 +51,7 @@ try {
   await page.locator('summary').filter({ hasText: 'Matched facilities and read-only contact context' }).click();
   await page.locator('#matches summary').filter({ hasText: 'Facility North' }).click();
   assert.match(await page.locator('#matches').innerText(), /Same care category:/); checks.push('Care synonym is visible.');
-  api.flags.invalidId = true; await page.locator('#scan').click(); await page.getByText('SCAN FAILED', { exact: false }).waitFor();
+  api.flags.invalidId = true; await page.locator('#scan').click(); await status('SCAN FAILED').waitFor();
   assert.match(await page.locator('#scan-status').innerText(), /stale/);
   assert.equal(await page.getByRole('button', { name: 'Approve and write to CRM', exact: true }).isDisabled(), true); checks.push('Stale approval disabled after failed rescan.');
   assert.deepEqual(errors, []); checks.push('No browser JavaScript errors.');
