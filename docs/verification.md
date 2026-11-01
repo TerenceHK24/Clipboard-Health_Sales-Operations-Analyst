@@ -1,8 +1,14 @@
-# Verification — version 2.3.0
+# Verification — version 2.3.1
 
 ## Root cause
 
 The user's account response exposes `account_id`; the earlier app and its mocks assumed `id`. The scan failed before matching, and the empty queue was not persistently distinguished from a successful scan with no differences. This release normalizes primary keys at the API boundary for list, get, create and patch, separately for accounts and contacts.
+
+## Administrator parity enhancement (2.3.1)
+
+Every matched facility now has a named Administrator comparison in the review UI. One active CRM Administrator must match the public name for a `matched` result. A mismatch generates a distinct human-approval proposal, not an automatic write. A matching contact with a different title is proposed for title/status correction rather than duplicate creation. If several contacts share the name, identity is ambiguous and automated contact writes are blocked; reviewer investigation is required. A missing website Administrator is `unavailable`, not a false match. CHOW defers changes to the existing account's contacts.
+
+After approved Administrator operations, the app rereads all contacts and verifies exactly one active Administrator matches the website. Before the first write, it checks that no competing or altered matching contact appeared after the scan. A read-only scan and a rejection perform zero CRM writes. All these safeguards are exercised using synthetic CRM data, never the user's credential.
 
 ## Independent verification layers
 
