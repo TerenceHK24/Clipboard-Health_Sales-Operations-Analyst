@@ -27,3 +27,7 @@ Set **Start in** to a writable directory and **If the task is already running: D
 ## Why not a normal ephemeral GitHub Actions cron job?
 
 GitHub-hosted runners lose their local SQLite database after the workflow ends. Without a secure persistent journal, a second run may propose previously rejected decisions, violating the requirement. The cron/Task Scheduler example above preserves the journal between runs. GitHub Actions can be used only with a secured persistent store and appropriate secret-management design, which this repository intentionally does not enable.
+
+## Grouped review and safety
+
+Daily jobs must call `scan` only. Group Approve All/Reject All, manual identity mapping and administrator contact decisions happen exclusively inside the authenticated local reviewer app. Retain and back up the same SQLite `--data-dir` across daily runs so rejected/applied proposals are not re-presented without material source changes.
