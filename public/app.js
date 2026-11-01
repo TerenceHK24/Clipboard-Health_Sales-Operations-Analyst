@@ -11,6 +11,7 @@ const element = (tag, text, className) => {
 };
 const pretty = value => value === null || value === undefined || value === '' ? 'Not provided' : typeof value === 'object' ? JSON.stringify(value) : String(value);
 const label = key => key.replaceAll('_', ' ').replace(/\b\w/g, char => char.toUpperCase());
+const normalizeContactText = value => String(value ?? '').normalize('NFKD').toLowerCase().trim().replace(/\s+/g, ' ');
 function table(headers, rows) {
   const node = element('table'), head = element('thead'), tr = element('tr');
   headers.forEach(value => tr.append(element('th', value))); head.append(tr); node.append(head);
@@ -58,6 +59,8 @@ function render() {
     [latest?.summary.accounts ?? '—', 'CRM accounts inspected'],
     [latest ? state.proposals.filter(p => p.status === 'pending').length : '—', 'Awaiting your review'],
     [state.proposals.filter(p => p.status === 'applied').length, 'Approved and verified'],
+    [latest ? latest.matches.filter(m => m.administratorCheck?.status === 'approval_required').length : '—', 'Website / CRM Administrator differences'],
+    [latest ? latest.matches.filter(m => m.administratorCheck?.status === 'manual_review').length : '—', 'Administrator identities needing manual review'],
   ].map(([value, title]) => { const box = element('div', undefined, 'metric'); box.append(element('strong', value), element('span', title)); return box; }));
   $('company').replaceChildren();
   if (latest) {
@@ -92,7 +95,18 @@ function render() {
   $('matches').replaceChildren();
   for (const match of latest?.matches || []) {
     const details = element('details', undefined, 'box');
-    details.append(element('summary', `${match.name} — ${match.result}`));
+    const administrator = match.administratorCheck;
+    const adminLabel = { matched: 'Matches', approval_required: 'Approval required',
+      manual_review: 'Manual identity review', deferred: 'Deferred', unavailable: 'Not published' }[administrator?.status];
+    details.append(element('summary', `${match.name} — ${match.result}${adminLabel ? ` · Administrator: ${adminLabel}` : ''}`));
+    if (administrator) {
+      details.append(table(['Administrator comparison', 'Observed value'], [
+        ['Public website', administrator.website || 'Not published'],
+        ['CRM currently active', administrator.crmActive?.join('; ') || 'None'],
+        ['Reconciliation', adminLabel || 'Unknown'],
+      ]), element('p', administrator.message || 'Administrator evidence is incomplete.',
+        administrator.status === 'approval_required' || administrator.status === 'manual_review' ? 'warning' : 'muted'));
+    }
     if (match.website) details.append(element('pre', JSON.stringify(match.website, null, 2)));
     if (match.careEquivalent) details.append(element('p', `Same care category: website “${match.careEquivalent.website}” = CRM “${match.careEquivalent.crm}” (no update).`, 'notice'));
     if (match.websiteAdministrator) details.append(element('p', `Administrator: website “${match.websiteAdministrator}”; CRM ${match.crmAdministrators?.map(c => `${c.name} (${c.status})`).join('; ') || 'none'}.`));
@@ -110,6 +124,20 @@ function renderDetail(item, detail = $('detail'), insideGroup = false) {
   if (!item) { detail.append(element('div', !canApprove() ? 'No verified current result. Run a successful read-only scan first.' : 'No pending decision in this view. Check matched facilities and previous decisions below.', 'empty')); return; }
   detail.append(element('span', label(item.status), `pill ${item.status}`), element('h2', item.title), element('p', item.reason));
   if (item.kind === 'chow') detail.append(element('div', 'CHOW safeguard: create a new current account first. The old account keeps its parent, status, name, note, revenue, AR, and contacts. Only its current-account link changes.', 'warning'));
+  if (item.kind === 'admin_contact') {
+    const cf = state.contactFields;
+    const titles = state.administratorTitles || [];
+    const administrators = item.evidence.contacts.filter(c => titles.some(title =>
+      normalizeContactText(title) === normalizeContactText(c[cf.title])) &&
+      normalizeContactText(c[cf.status]) === 'active');
+    const currentlyActive = administrators.map(c => c[cf.name]).join('; ') || 'None';
+    const box = element('div', undefined, 'warning');
+    box.append(element('strong', 'Administrator mismatch — approval required'),
+      element('p', `Website Administrator: ${item.website.administrator}`),
+      element('p', `CRM active Administrator: ${currentlyActive}`),
+      element('p', 'Review each proposed contact operation below. Nothing is changed until you approve. Existing names, emails and phones will be preserved.'));
+    detail.append(box);
+  }
   if (item.error) detail.append(element('p', item.error, 'error'));
   const evidence = element('div', undefined, 'evidence');
   if (item.website) {
