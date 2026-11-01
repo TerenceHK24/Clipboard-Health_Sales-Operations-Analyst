@@ -1,32 +1,47 @@
-# Bellhaven Location Scraper
+# Bellhaven Community Scraper
 
-Dynamically discovers Bellhaven community pages and saves their detail fields in CSV. No location names, addresses, care types, or total counts are hard-coded.
+Cross-platform Node.js CLI to dynamically discover and export Bellhaven communities.
 
-## Installation and usage
+## Run on any Windows / macOS / Linux computer
 
-```bash
-python -m pip install -r requirements.txt
-python scraper.py --output bellhaven_locations.csv
-```
-
-Optional flags: `--base-url` for an alternative host and `--delay 0.5` to slow requests.
-
-## Discovery and extraction
-
-- Begins at the paginated `/communities` directory and the homepage, following same-host links to community details.
-- Traverses every linked directory page, deduplicates links, and compares discovered URLs to the published directory count.
-- Parses each page by the labels in `<dl><dt>...</dt><dd>...</dd></dl>`, not by positional indexes.
-- Separates multiline address into street address, city, state, ZIP; captures all care offering badges; captures optional administrator and phone.
-- Exports UTF-8-with-BOM CSV suitable for Excel.
-
-Output columns: `name,address,city,state,zip,care_offerings,administrator,phone,source_url`. Multiple care offerings are joined with ` | `.
-
-## Tests
+Install **Node.js 20+** (includes npx) and **Git**. Open a terminal in the folder where you want the CSV:
 
 ```bash
-python -m unittest discover -s tests -v
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst
 ```
 
-## Notes
+For a different output path:
 
-The directory displayed 34 communities across 3 pages when inspected, while the homepage mentioned 35. The scraper therefore also discovers community links from the homepage. Pages not linked from either starting point cannot be guaranteed. The scraper raises an exception on missing essential fields or an obvious shortfall against the directory count instead of silently exporting incomplete records.
+```bash
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst --output results/bellhaven.csv
+```
+
+The output is `bellhaven_locations.csv` in your working directory by default.
+
+Optional flags: `--base-url URL`, `--delay-ms 500`, `--help`. The npx command downloads this repository and its npm dependencies to the local npm cache. No Python installation or clone is needed, but internet access is needed on the first run.
+
+## How it works
+
+- Starts from the homepage and the paginated community directory; follows same-origin links to detail pages automatically.
+- Follows every linked directory page and deduplicates location links.
+- Checks discovered location count against the directory's published count when available (the count itself is not hard-coded).
+- Parses location heading and the labeled `<dl><dt>...</dt><dd>...</dd></dl>` fields using Cheerio, independent of ordering.
+- Splits the multiline address into street, city, state, ZIP; collects all care badges and optional administrator and phone.
+- Uses timeouts, retries for transient server failures, and writes only after all pages are parsed successfully.
+- Produces Excel-compatible UTF-8 CSV (with BOM).
+
+Columns: `name,address,city,state,zip,care_offerings,administrator,phone,source_url`.
+
+## Development
+
+```bash
+npm install
+npm test
+node bin/bellhaven-scrape.js --help
+```
+
+The earlier Python scraper remains in the repository but is not required for the npx workflow.
+
+## Completeness
+
+The directory was observed listing 34 communities on three pages, while the homepage stated 35 and linked to a recently added location. This CLI examines both sources rather than hard-coding 34 or 35. Truly unlinked detail pages cannot be discovered by ordinary link traversal. A changed site structure may require parser maintenance.
