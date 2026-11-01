@@ -3,12 +3,17 @@ import { hash } from './config.js';
 export const normalize = value => String(value ?? '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
   .toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
 export const nameKey = value => normalize(value).replace(/\bparent account\b/g, '')
-  .replace(/\bhealthcare\b/g, 'health care').replace(/\bcentre\b/g, 'center').trim();
+  .replace(/\bhealthcare\b/g, 'health care').replace(/\bcentre\b/g, 'center').replace(/^the\s+/, '').trim();
 const STREET_WORDS = { street: 'st', road: 'rd', avenue: 'ave', boulevard: 'blvd', drive: 'dr',
   lane: 'ln', court: 'ct', highway: 'hwy', parkway: 'pkwy', north: 'n', south: 's', east: 'e', west: 'w' };
 export const streetKey = value => normalize(value).split(' ').map(word => STREET_WORDS[word] || word).join(' ');
 export const phoneKey = value => String(value ?? '').replace(/\D/g, '').replace(/^1(?=\d{10}$)/, '');
-const careKey = value => [...new Set(String(value ?? '').split(/[|;,]/).map(normalize).filter(Boolean))].sort().join('|');
+export const careKey = (value, config = {}) => {
+  const aliases = Object.fromEntries(Object.entries(config.careAliases || { 'memory care': 'memory support' })
+    .map(([a, b]) => [normalize(a), normalize(b)]));
+  return [...new Set(String(value ?? '').split(/[|;,]/).map(normalize)
+    .map(entry => aliases[entry] || entry).filter(Boolean))].sort().join('|');
+};
 const text = value => value === undefined || value === null ? '' : String(value).trim();
 
 export function amount(value) {
@@ -33,8 +38,10 @@ export function websiteIdentity(row) {
 export function identityScore(site, account, config) {
   const f = config.fields;
   const place = normalize(site.city) === normalize(account[f.city]) && normalize(site.state) === normalize(account[f.state]);
-  if (!site.city || !site.state || !place) return 0;
   const name = nameKey(site.name) === nameKey(account[f.name]);
+  // A uniquely identified brand may have moved, changed operator or corrected all address fields.
+  // Global exact-name candidates are reviewed and never inferred from care type alone.
+  if (!site.city || !site.state || !place) return name ? 92 : 0;
   const phone = Boolean(phoneKey(site.phone)) && phoneKey(site.phone) === phoneKey(account[f.phone]);
   const street = Boolean(streetKey(site.address)) && streetKey(site.address) === streetKey(account[f.street]);
   if (street) return 100 + Number(name) * 20 + Number(phone) * 10;
@@ -53,7 +60,7 @@ function sameFacility(a, b, config) {
   const sameName = nameKey(a[f.name]) === nameKey(b[f.name]);
   const samePhone = Boolean(phoneKey(a[f.phone])) && phoneKey(a[f.phone]) === phoneKey(b[f.phone]);
   // Co-located but differently named/categorized services are not automatically duplicates.
-  return (sameName || samePhone) && careKey(a[f.care]) === careKey(b[f.care]);
+  return (sameName || samePhone) && careKey(a[f.care], config) === careKey(b[f.care], config);
 }
 export function appendNote(existing, addition) {
   const value = text(existing);
@@ -70,26 +77,64 @@ function differences(account, desired, config) {
   const f = config.fields, patch = {};
   for (const [key, value] of Object.entries(desired)) {
     const same = key === f.phone ? phoneKey(account[key]) === phoneKey(value)
-      : key === f.care ? careKey(account[key]) === careKey(value)
+      : key === f.care ? careKey(account[key], config) === careKey(value, config)
       : key === f.street ? streetKey(account[key]) === streetKey(value)
       : normalize(account[key]) === normalize(value);
     if (!same) patch[key] = value;
   }
   return patch;
 }
-function proposal(key, kind, title, website, accounts, steps, reason, config, contacts = []) {
+function proposal(key, kind, title, website, accounts, steps, reason, config, contacts = [], contactChecks = []) {
   const checks = accounts.map(account => ({ id: account[config.fields.id], before: guard(account, config) }));
-  const identity = { key, kind, website: website ? websiteIdentity(website) : null, checks, steps };
+  const contactGuards = contactChecks.map(contact => ({ id: contact[config.contactFields.id], before: contactGuard(contact, config) }));
+  const identity = { key, kind, website: website ? websiteIdentity(website) : null,
+    manualMatchAccountId: website?.manual_match_account_id || null, checks, contactGuards, steps };
   const id = hash(identity);
-  const approvedSteps = steps.map((step, index) => step.method === 'POST' ? { ...step, body: { ...step.body,
+  const approvedSteps = steps.map((step, index) => step.method === 'POST' && (step.resource || 'accounts') === 'accounts' ? { ...step, body: { ...step.body,
     [config.fields.note]: appendNote(step.body[config.fields.note],
       `[review-op:${hash(`${id}:${index}`)}] Source: ${website?.source_url || config.siteUrl}`),
   } } : step);
-  return { id, key, kind, title, website, checks, steps: approvedSteps, reason,
+  const keys = [...new Set(steps.flatMap(step => Object.keys(step.body)))].sort();
+  const groupKey = `${kind}:${keys.join('+')}`;
+  const groupLabel = ({ update: 'Repeated facility-field corrections', reparent: 'Parent account corrections',
+    admin_contact: 'Administrator contact corrections', create: 'Facilities missing in CRM',
+    missing_from_site: 'CRM facilities absent from public site', flag_ambiguous: 'Uncertain identities',
+    duplicate: 'Possible duplicate account dispositions', chow: 'CHOW / protected billing history' })[kind] || 'Other review decisions';
+  return { id, key, kind, title, groupKey, groupLabel, website, checks, contactGuards, steps: approvedSteps, reason,
     evidence: { accounts, contacts }, revision: hash({ ...identity, steps: approvedSteps }) };
 }
 function patchStep(account, body, config) {
-  return { method: 'PATCH', id: account[config.fields.id], body };
+  return { method: 'PATCH', resource: 'accounts', id: account[config.fields.id], body };
+}
+export function contactGuard(contact, config) {
+  return Object.fromEntries(Object.values(config.contactFields).map(key => [key, contact[key] ?? null]));
+}
+const administratorContact = (contact, config) => config.administratorTitles
+  .some(title => normalize(title) === normalize(contact[config.contactFields.title]));
+function administratorProposal(site, account, contacts, config) {
+  if (!site.administrator) return null;
+  const cf = config.contactFields, admins = contacts.filter(c => c[cf.account] === account[config.fields.id] && administratorContact(c, config));
+  const person = admins.filter(c => nameKey(c[cf.name]) === nameKey(site.administrator));
+  if (person.length > 1) return null; // identities are ambiguous; do not deactivate or create
+  const active = c => normalize(c[cf.status]) === 'active';
+  const alreadyCurrent = person.length === 1 && active(person[0]) && admins.filter(active).length === 1;
+  if (alreadyCurrent) return null;
+  const steps = [];
+  if (person.length === 1) {
+    if (!active(person[0])) steps.push({ resource: 'contacts', method: 'PATCH', id: person[0][cf.id], body: { [cf.status]: 'Active' } });
+  } else {
+    steps.push({ resource: 'contacts', method: 'POST', body: { [cf.account]: account[config.fields.id],
+      [cf.name]: site.administrator, [cf.title]: config.administratorTitles[0], [cf.status]: 'Active' } });
+  }
+  // Never overwrite an existing person's name, personal email or phone with an unrelated identity.
+  for (const contact of admins.filter(c => active(c) && nameKey(c[cf.name]) !== nameKey(site.administrator))) {
+    steps.push({ resource: 'contacts', method: 'PATCH', id: contact[cf.id], body: { [cf.status]: 'Inactive' } });
+  }
+  if (!steps.length) return null;
+  return proposal(`admin:${site.source_url}:${account[config.fields.id]}`, 'admin_contact',
+    `Reconcile administrator for ${site.name}`, site, [account], steps,
+    'Create or reactivate the website administrator, then mark superseded administrator contacts Inactive. Existing contact identities, emails and phones are preserved; no personal details are invented.',
+    config, admins, admins);
 }
 
 export function validateAccounts(accounts, config) {
@@ -104,7 +149,7 @@ export function validateAccounts(accounts, config) {
 }
 
 /** Pure planning: this function cannot perform API writes. */
-export function plan(snapshot, config) {
+export function plan(snapshot, config, { manualLinks = {} } = {}) {
   const { website, accounts, contacts = [] } = snapshot;
   validateAccounts(accounts, config);
   if (!website.complete || !website.company || !website.locations.length) throw new Error('A complete website snapshot including the corporate footer is required.');
@@ -131,7 +176,12 @@ export function plan(snapshot, config) {
   const referencedParents = new Set(accounts.map(a => a[f.parent]).filter(Boolean));
   const eligible = accounts.filter(a => a[f.id] !== parentId && !referencedParents.has(a[f.id]) && !a[f.duplicate] && !a[f.chow]);
   const used = new Set(), potential = new Set();
-  const decisions = website.locations.map(site => {
+  const decisions = website.locations.map(row => {
+    const manuallySelected = manualLinks[row.source_url];
+    const site = manuallySelected ? { ...row, manual_match_account_id: manuallySelected } : row;
+    const manualAccount = manuallySelected ? eligible.find(a => a[f.id] === manuallySelected) : null;
+    if (manuallySelected && !manualAccount) return { site, candidates: [], kind: 'invalid_manual_link' };
+    if (manualAccount) return { site, candidates: [{ account: manualAccount, score: 200 }], kind: 'matched', account: manualAccount, duplicates: [], manuallyLinked: true };
     const candidates = eligible.map(account => ({ account, score: identityScore(site, account, config) }))
       .filter(item => item.score >= 50).sort((a, b) => b.score - a.score || text(a.account[f.id]).localeCompare(text(b.account[f.id])));
     candidates.forEach(item => potential.add(item.account[f.id]));
@@ -158,6 +208,11 @@ export function plan(snapshot, config) {
   for (const item of decisions) {
     const { site, candidates } = item;
     if (item.kind === 'matched' && [item.account, ...item.duplicates].some(a => claims.get(a[f.id]) > 1)) item.kind = 'ambiguous';
+    if (item.kind === 'invalid_manual_link') {
+      notices.push(`${site.name}: the verified manual account link no longer points to an eligible account. Remove or correct it before making changes.`);
+      matches.push({ name: site.name, result: 'Manual match must be rechecked', source_url: site.source_url });
+      continue;
+    }
     if (item.kind === 'ambiguous') {
       notices.push(`${site.name}: ambiguous identity; no create, merge, or re-parent was inferred.`);
       for (const { account } of candidates) {
@@ -179,7 +234,7 @@ export function plan(snapshot, config) {
       continue;
     }
     const account = item.account, accountId = account[f.id];
-    const accountContacts = contacts.filter(contact => contact.account_id === accountId);
+    const accountContacts = contacts.filter(contact => contact[config.contactFields.account] === accountId);
     used.add(accountId);
     const patch = differences(account, desiredFields(site, config), config);
     const wrongParent = account[f.parent] !== parentId;
@@ -217,11 +272,25 @@ export function plan(snapshot, config) {
         [loser, account], [patchStep(loser, body, config)], 'Same normalized address and matching identity/care evidence under the same parent. The survivor is selected using receivables and revenue history. Review all evidence before approval.', config,
         contacts.filter(contact => [loser[f.id], accountId].includes(contact.account_id))));
     }
-    const admins = accountContacts.filter(c => normalize(c.title) === 'administrator' && c.status === 'Active');
-    if (site.administrator && !admins.some(c => nameKey(c.name) === nameKey(site.administrator))) {
-      notices.push(`${site.name}: website administrator '${site.administrator}' needs contact verification. Existing names/emails are not renamed or reassigned automatically.`);
+    const admins = accountContacts.filter(c => administratorContact(c, config));
+    if (site.administrator && admins.filter(c => nameKey(c[config.contactFields.name]) === nameKey(site.administrator)).length > 1) {
+      notices.push(`${site.name}: multiple administrator contacts have the website person's name; resolve manually, no contact change proposed.`);
+    } else if (wrongParent && financialGate) {
+      if (site.administrator) notices.push(`${site.name}: reconcile administrator after CHOW account is created; old contacts must remain untouched.`);
+    } else if (account[f.status] === 'Inactive') {
+      if (site.administrator) notices.push(`${site.name}: administrator change deferred until the inactive facility's status is reviewed.`);
+    } else {
+      const contactChange = administratorProposal(site, account, accountContacts, config);
+      if (contactChange) proposals.push(contactChange);
     }
-    matches.push({ name: site.name, result: wrongParent ? (financialGate ? 'CHOW required' : 'Wrong parent') : Object.keys(patch).length ? 'Field differences' : 'Matched',
+    const equivalentCare = Boolean(site.care_offerings && account[f.care] &&
+      normalize(site.care_offerings) !== normalize(account[f.care]) &&
+      careKey(site.care_offerings, config) === careKey(account[f.care], config));
+    matches.push({ name: site.name, result: wrongParent ? (financialGate ? 'CHOW required' : 'Wrong parent')
+      : Object.keys(patch).length ? 'Field differences' : equivalentCare ? 'Matched (care synonym)' : 'Matched',
+      careEquivalent: equivalentCare ? { website: site.care_offerings, crm: account[f.care] } : null,
+      websiteAdministrator: site.administrator, crmAdministrators: admins.map(c => ({ name: c[config.contactFields.name],
+        status: c[config.contactFields.status], title: c[config.contactFields.title] })),
       account_id: accountId, source_url: site.source_url, website: site, account, contacts: accountContacts });
   }
   for (const account of accounts) {
