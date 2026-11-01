@@ -82,11 +82,13 @@ export function makeConfig(overrides = {}) {
 
 export async function loadConfig(path, overrides = {}, env = process.env) {
   const file = path ? JSON.parse(await readFile(path, 'utf8')) : {};
-  if ('token' in file || 'CRM_TOKEN' in file) throw new Error('Do not put credentials in the configuration JSON. Use CRM_TOKEN.');
+  // Credential values belong only in an interactive terminal prompt.
+  const credentialSetting = Object.keys(file).find(key => /^(?:token|crm_token|authorization|bearer_token|api_key|secret|password)$/i.test(key));
+  if (credentialSetting) throw new Error('Do not put credentials in configuration files. The CLI prompts for the CRM token each time.');
   const config = makeConfig({ ...file, ...(env.SITE_URL ? { siteUrl: env.SITE_URL } : {}),
     ...(env.CRM_API_URL ? { apiUrl: env.CRM_API_URL } : {}), ...overrides });
-  const token = env.CRM_TOKEN || '';
-  const scope = hash(`${config.apiUrl}\n${config.siteUrl}\n${token}`);
+  // Stable across token rotation so the journal does not re-propose decided cases.
+  const scope = hash(`${config.apiUrl}\n${config.siteUrl}`);
   const dataDir = resolve(overrides.dataDir || env.REVIEW_DATA_DIR || file.dataDir || `${homedir()}/.bellhaven-review/${scope.slice(0,16)}`);
-  return { config, token, scope, dataDir };
+  return { config, scope, dataDir };
 }
