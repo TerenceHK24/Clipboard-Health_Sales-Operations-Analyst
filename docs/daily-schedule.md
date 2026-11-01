@@ -1,33 +1,33 @@
-# Daily, read-only scheduling
+# Daily schedule with interactive CRM authentication
 
-Only the **`scan`** command belongs in unattended automation. Do **not** automate `review`, `approve`, or `retry`. All approvals are made by a human using the local app.
+**Security requirement:** Each CRM `scan` / `review` process asks a person to paste a hidden bearer token. This means **unattended, scheduled CRM scans are not supported**. A cron job or GitHub Actions runner has no interactive terminal: it must fail instead of reading a saved token. No daily job may auto-approve or write to CRM.
 
-## macOS/Linux crontab example
+You can schedule the **public-website-only scraper**, which needs no CRM token. This captures a dated public snapshot, not a CRM reconciliation. Run `scan` from your terminal each day you want fresh CRM comparisons, then open `review` to approve decisions. Use the same persistent `--data-dir` for both.
 
-Install Node.js 22.16+, Git and npm for the scheduled user's account. Put the credential in a private `/home/you/.config/bellhaven/credentials.env`, and create a persistent state directory `/home/you/.local/share/bellhaven-review` (replace `you` with your OS username). Open `crontab -e` and add:
+## macOS/Linux cron (public website only)
+
+Ensure Node.js 22.16+, Git and npm/npx are available for the scheduled user. Create a private directory for site snapshots, e.g. `/home/you/bellhaven-snapshots`. An example for systems with support for `CRON_TZ`:
 
 ```cron
-# On systems supporting CRON_TZ (for example, cronie): 08:30 America/Edmonton each day.
 CRON_TZ=America/Edmonton
-30 8 * * * /usr/bin/env npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scan --env-file /home/you/.config/bellhaven/credentials.env --data-dir /home/you/.local/share/bellhaven-review >>/home/you/.local/share/bellhaven-review/daily.log 2>&1
+30 8 * * * /usr/bin/env npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scrape --output /home/you/bellhaven-snapshots/latest.csv --snapshot /home/you/bellhaven-snapshots/latest.json >>/home/you/bellhaven-snapshots/scrape.log 2>&1
 ```
 
-Make sure `npx` is on the **cron PATH** (or substitute the absolute binary path from `command -v npx`). `CRON_TZ` support varies; if absent, configure the computer/cron daemon timezone, or use a scheduler with an explicit timezone. For a stable reproducible deployment, pin `github:...#<reviewed-commit-sha>` and update manually after review. Log files may contain facility names; restrict their permissions. The **same** `--data-dir` must be used for every scheduled scan and interactive review. Take encrypted state backups.
+`CRON_TZ` support is platform-specific. Set a suitable system timezone otherwise. Substitute the path to `npx` from `command -v npx` where needed. This overwrites the latest public files; arrange separate dated backups if historical evidence is needed.
 
-## Windows Task Scheduler
+## Windows Task Scheduler (public website only)
 
-Create a basic task triggering daily at **08:30 local time** (on a machine using America/Edmonton) with **Program/script:** the path from `where npx.cmd`, **Arguments:**
+Schedule a daily program using `npx.cmd` (locate with `where npx.cmd`), with arguments:
 
 ```text
---yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scan --env-file C:\Private\Bellhaven\credentials.env --data-dir C:\Private\Bellhaven\state
+--yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scrape --output C:\Bellhaven\latest.csv --snapshot C:\Bellhaven\latest.json
 ```
 
-Set **Start in** to a writable directory and **If the task is already running: Do not start a new instance**. For schedule reliability, run on a stable computer that is powered on and connected. Some Windows versions require `cmd.exe /c` in front of the `npx.cmd` command.
+Select a writable directory and disable overlapping runs. This does not contact the CRM. Run the interactive CRM scan or Review App manually:
 
-## Why not a normal ephemeral GitHub Actions cron job?
+```sh
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst scan --data-dir ./bellhaven-state
+npx --yes github:TerenceHK24/Clipboard-Health_Sales-Operations-Analyst review --data-dir ./bellhaven-state
+```
 
-GitHub-hosted runners lose their local SQLite database after the workflow ends. Without a secure persistent journal, a second run may propose previously rejected decisions, violating the requirement. The cron/Task Scheduler example above preserves the journal between runs. GitHub Actions can be used only with a secured persistent store and appropriate secret-management design, which this repository intentionally does not enable.
-
-## Grouped review and safety
-
-Daily jobs must call `scan` only. Group Approve All/Reject All, manual identity mapping and administrator contact decisions happen exclusively inside the authenticated local reviewer app. Retain and back up the same SQLite `--data-dir` across daily runs so rejected/applied proposals are not re-presented without material source changes.
+Each command prompts for a token **every time**. The token is not stored. SQLite stores decisions and review evidence; keep `--data-dir` fixed, backed up and private. If an unattended daily CRM scan becomes a requirement, the operator must explicitly authorize an alternative noninteractive authentication method; this version will not circumvent the interactive-only rule.
