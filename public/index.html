@@ -5,9 +5,10 @@
 <body>
 <header><div><p class="eyebrow">SALES OPERATIONS · LOCAL WORKSPACE</p><h1>Community CRM Review</h1>
 <p>Public-site evidence. Human decisions. Auditable changes.</p></div>
-<div class="header-actions"><span class="pill">Approval required</span><button id="refresh" class="secondary">Refresh</button><button id="scan">Run read-only scan</button></div></header>
+<div class="header-actions"><span class="pill" id="version"></span><span class="pill">Approval required</span><button id="refresh" class="secondary">Refresh</button><button id="scan">Run read-only scan</button></div></header>
 <main>
 <div id="message" role="status" aria-live="polite"></div>
+<section id="scan-status" role="status" aria-live="polite"></section>
 <section id="summary" class="summary"></section>
 <section class="company" id="company"></section>
 <div class="toolbar"><label>Reviewer <input id="reviewer" placeholder="Name for the decision log" maxlength="100"></label>

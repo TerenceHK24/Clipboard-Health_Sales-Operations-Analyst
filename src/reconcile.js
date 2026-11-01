@@ -270,7 +270,7 @@ export function plan(snapshot, config, { manualLinks = {} } = {}) {
         [f.note]: appendNote(loser[f.note], `Duplicate of ${accountId}, supported by ${site.source_url}. Billing history and contacts remain on this record; no merge or deletion is performed.`) };
       proposals.push(proposal(`duplicate:${loser[f.id]}:${accountId}`, 'duplicate', `Mark duplicate: ${loser[f.name]}`, site,
         [loser, account], [patchStep(loser, body, config)], 'Same normalized address and matching identity/care evidence under the same parent. The survivor is selected using receivables and revenue history. Review all evidence before approval.', config,
-        contacts.filter(contact => [loser[f.id], accountId].includes(contact.account_id))));
+        contacts.filter(contact => [loser[f.id], accountId].includes(contact[config.contactFields.account]))));
     }
     const admins = accountContacts.filter(c => administratorContact(c, config));
     if (site.administrator && admins.filter(c => nameKey(c[config.contactFields.name]) === nameKey(site.administrator)).length > 1) {
@@ -300,7 +300,7 @@ export function plan(snapshot, config, { manualLinks = {} } = {}) {
     proposals.push(proposal(`absent:${account[f.id]}`, 'missing_from_site', `Not on website: ${account[f.name]}`, null, [account],
       [patchStep(account, { [f.status]: 'Needs Review', [f.note]: note }, config)],
       'Absence is a review signal, not evidence of closure or another owner. Parent and financial fields remain unchanged.', config,
-      contacts.filter(contact => contact.account_id === account[f.id])));
+      contacts.filter(contact => contact[config.contactFields.account] === account[f.id])));
   }
   return { proposals, matches, notices, parent: guard(parent, config) };
 }

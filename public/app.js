@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 let sessionKey = location.hash.slice(1) || sessionStorage.getItem('review-key');
 if (location.hash) { sessionStorage.setItem('review-key', sessionKey); history.replaceState(null, '', location.pathname); }
-let state = null, selectedId = null, selectedGroup = null, busy = false;
+let state = null, selectedGroup = null, busy = false;
 const element = (tag, text, className) => {
   const node = document.createElement(tag);
   if (text !== undefined) node.textContent = text;
@@ -37,13 +37,26 @@ function filtered() {
   return state.proposals.filter(item => (filter === 'all' || (filter === 'blocked' ? ['blocked', 'approved', 'applying'].includes(item.status) : item.status === filter)) &&
     (!query || JSON.stringify(item).toLowerCase().includes(query)));
 }
+const canApprove = () => Boolean(state?.latest) && state?.lastAttempt?.status !== 'failed';
+function fieldValue(key, value) {
+  const f = state.fields;
+  return [f.parent, f.duplicate, f.chow].includes(key) && state.accountNames?.[value]
+    ? `${state.accountNames[value]} (${value})` : value;
+}
 function render() {
   if (!state) return;
+  $('version').textContent = `v${state.version || 'unknown'}`;
   const latest = state.latest;
+  const failed = state.lastAttempt?.status === 'failed';
+  const statusText = failed
+    ? `SCAN FAILED — no current reconciliation is available. ${state.lastAttempt.error}${latest ? ' Previous results are stale; approval is disabled until a successful scan.' : ' Zero proposals is not a finding of zero inconsistencies.'}`
+    : latest ? 'SCAN SUCCEEDED — complete website, account and contact snapshots were compared.'
+    : 'NOT SCANNED — no conclusion about inconsistencies has been made.';
+  $('scan-status').replaceChildren(element('div', statusText, failed ? 'error' : 'notice'));
   $('summary').replaceChildren(...[
     [latest?.summary.facilities ?? '—', 'Public facilities'],
     [latest?.summary.accounts ?? '—', 'CRM accounts inspected'],
-    [state.proposals.filter(p => p.status === 'pending').length, 'Awaiting your review'],
+    [latest ? state.proposals.filter(p => p.status === 'pending').length : '—', 'Awaiting your review'],
     [state.proposals.filter(p => p.status === 'applied').length, 'Approved and verified'],
   ].map(([value, title]) => { const box = element('div', undefined, 'metric'); box.append(element('strong', value), element('span', title)); return box; }));
   $('company').replaceChildren();
@@ -58,7 +71,7 @@ function render() {
   const items = filtered();
   const groups = new Map();
   for (const item of items) {
-    const key = item.groupKey || item.kind;
+    const key = `${item.groupKey || item.kind}:${item.status}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(item);
   }
@@ -72,7 +85,7 @@ function render() {
     button.addEventListener('click', () => { selectedGroup = key; render(); });
     return button;
   }));
-  if (!groups.size) $('queue').append(element('p', 'No items in this view.', 'muted'));
+  if (!groups.size) $('queue').append(element('p', failed ? 'Scan failed. No verified current result.' : !latest ? 'Run a scan before reviewing results.' : 'No items in this filter. Check matched facilities and previous decisions below.', 'muted'));
   const group = groups.get(selectedGroup) || [];
   if (group.length > 1) renderGroup(group);
   else renderDetail(group[0]);
@@ -94,7 +107,7 @@ function render() {
 }
 function renderDetail(item, detail = $('detail'), insideGroup = false) {
   detail.replaceChildren();
-  if (!item) { detail.append(element('div', 'No pending decision here. Use the filters to inspect previous decisions or run a new scan.', 'empty')); return; }
+  if (!item) { detail.append(element('div', !canApprove() ? 'No verified current result. Run a successful read-only scan first.' : 'No pending decision in this view. Check matched facilities and previous decisions below.', 'empty')); return; }
   detail.append(element('span', label(item.status), `pill ${item.status}`), element('h2', item.title), element('p', item.reason));
   if (item.kind === 'chow') detail.append(element('div', 'CHOW safeguard: create a new current account first. The old account keeps its parent, status, name, note, revenue, AR, and contacts. Only its current-account link changes.', 'warning'));
   if (item.error) detail.append(element('p', item.error, 'error'));
@@ -110,7 +123,7 @@ function renderDetail(item, detail = $('detail'), insideGroup = false) {
   for (const account of item.evidence.accounts) {
     const box = element('div', undefined, 'box'); box.append(element('h3', account[f.name]), element('small', `Account ${account[f.id]}`),
       element('p', `${account[f.street] || ''}, ${account[f.city] || ''}, ${account[f.state] || ''}`),
-      element('small', `Parent: ${account[f.parent] || 'None'} · Status: ${account[f.status]}`),
+      element('small', `Parent: ${fieldValue(f.parent, account[f.parent]) || 'None'} · Status: ${account[f.status]}`),
       element('p', `Lifetime revenue: ${pretty(account[f.revenue])} · Outstanding AR: ${pretty(account[f.ar])}`)); evidence.append(box);
   }
   detail.append(evidence, element('h3', 'Exact approved operations'));
@@ -119,7 +132,7 @@ function renderDetail(item, detail = $('detail'), insideGroup = false) {
     detail.append(element('p', `${index + 1}. ${step.method} ${step.id ? `${resource} ${step.id}` : `new ${resource}`}`));
     const before = (resource === 'contacts' ? item.contactGuards : item.checks).find(check => check.id === step.id)?.before || {};
     detail.append(table(['Field', 'Before', 'After'], Object.entries(step.body).map(([key, value]) =>
-      [label(key), before[key], value === '$created_id' ? 'Verified ID of the account created in step 1' : value])));
+      [label(key), fieldValue(key, before[key]), value === '$created_id' ? 'Verified ID of the account created in step 1' : fieldValue(key, value)])));
     if (step.method === 'POST' && resource === 'accounts') detail.append(element('small', 'The new account note receives a deterministic operation marker and source URL for recovery.', 'muted'));
     if (step.method === 'POST' && resource === 'contacts') detail.append(element('small', 'No email or phone is invented for the new administrator contact. Existing contacts are preserved.', 'muted'));
   });
@@ -130,14 +143,13 @@ function renderDetail(item, detail = $('detail'), insideGroup = false) {
     const journal = element('details'); journal.append(element('summary', 'Write-ahead journal / recovery details'), element('pre', JSON.stringify(item.operations, null, 2))); detail.append(journal);
   }
   if (item.website?.record_type === 'facility') renderManualMatch(item, detail);
-  if ((!insideGroup && (item.status === 'pending' || ['blocked', 'approved', 'applying'].includes(item.status))) ||
-      (insideGroup && ['blocked','approved','applying'].includes(item.status))) {
+  if (['pending', 'blocked', 'approved', 'applying'].includes(item.status)) {
     const noteLabel = element('label', 'Decision note (optional)'), note = element('textarea'); note.rows = 2; note.maxLength = 2000; noteLabel.append(note); detail.append(noteLabel);
     const actions = element('div', undefined, 'actions');
     const choices = item.status === 'pending' ? [['approve', 'Approve and write to CRM'], ['reject', 'Reject — no CRM write']]
       : [['retry', 'Resume approved operation safely']];
     for (const [action, title] of choices) {
-      const button = element('button', title, action === 'reject' ? 'secondary' : ''); button.disabled = busy;
+      const button = element('button', title, action === 'reject' ? 'secondary' : ''); button.disabled = busy || (action !== 'reject' && !canApprove());
       button.addEventListener('click', async () => {
         const reviewer = $('reviewer').value.trim();
         if (!reviewer) { message('Enter a reviewer name before deciding.', true); $('reviewer').focus(); return; }
@@ -191,14 +203,14 @@ function renderManualMatch(item, detail) {
 function preview(item) {
   return item.steps.map(step => {
     const before = (step.resource === 'contacts' ? item.contactGuards : item.checks).find(c => c.id === step.id)?.before || {};
-    return Object.entries(step.body).map(([key, after]) => `${label(key)}: ${pretty(before[key])} → ${pretty(after)}`).join('; ');
+    return Object.entries(step.body).map(([key, after]) => `${label(key)}: ${pretty(fieldValue(key, before[key]))} → ${pretty(fieldValue(key, after))}`).join('; ');
   }).join(' / ');
 }
 function renderGroup(group) {
   const detail = $('detail'); detail.replaceChildren();
   const kind = group[0].groupLabel || label(group[0].kind);
   detail.append(element('span', `${group.length} proposed records`, 'pill'), element('h2', kind),
-    element('p', 'This group contains changes of the same kind and fields. Each account and its exact changes are listed below. Approval authorizes every listed operation; unchanged or stale groups are rejected without writing.'));
+    element('p', 'This group contains changes of the same kind and fields. Each account and its exact changes are listed below. Approval authorizes every listed operation. Changed membership blocks a batch; stale members are blocked during individual rechecks.'));
   if (group.some(item => ['chow','duplicate','reparent'].includes(item.kind))) detail.append(element('div',
     'High-impact group: verify each account identity, parent, revenue and outstanding AR. CHOW and duplicate cases cannot be treated as simple field corrections.', 'warning'));
   detail.append(table(['Account / facility', 'Change type', 'Exactly proposed'], group.map(item => [item.title, label(item.kind), preview(item)])));
@@ -219,6 +231,7 @@ function renderGroup(group) {
     const actions = element('div', undefined, 'actions');
     for (const [decision,title] of [['approve',`Approve all ${group.length} reviewed changes`],['reject',`Reject all ${group.length} reviewed changes`]]) {
       const button = element('button', title, decision === 'reject' ? 'secondary' : '');
+      button.disabled = busy || (decision === 'approve' && !canApprove());
       button.addEventListener('click', async () => {
         const reviewer = $('reviewer').value.trim(); if (!reviewer) { message('Enter reviewer name to make a decision.', true); return; }
         if (!confirm(`${decision.toUpperCase()} ${group.length} specific account proposals?\n\n${kind}\n\nReview the complete account-by-account preview above. Approval may perform multiple CRM writes; failed members stay blocked, and successful members are individually journaled.`)) return;
@@ -239,7 +252,7 @@ async function run(callback) {
   try { await callback(); }
   catch (error) { message(error.message, true); }
   finally { busy = false; try { await refresh(); } catch (error) { message(error.message, true); }
-    document.querySelectorAll('button').forEach(button => { button.disabled = false; }); }
+    $('scan').disabled = false; $('refresh').disabled = false; }
 }
 $('filter').addEventListener('change', render); $('search').addEventListener('input', render);
 $('refresh').addEventListener('click', () => run(refresh));

@@ -3,6 +3,7 @@ import { mkdirSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { hostname } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { decisionKey } from './decisions.js';
 
 const now = () => new Date().toISOString();
 const decode = row => row ? { ...JSON.parse(row.data), status: row.status, error: row.error,
@@ -72,30 +73,45 @@ export class Store {
     return row ? { id: row.id, at: row.at, ...JSON.parse(row.data) } : null;
   }
   recordRun(status, data) { this.db.prepare('INSERT INTO runs VALUES(?,?,?,?)').run(randomUUID(), now(), status, JSON.stringify(data)); }
+  latestAttempt() {
+    const row = this.db.prepare("SELECT * FROM runs WHERE status IN ('complete','failed') ORDER BY rowid DESC LIMIT 1").get();
+    return row ? { at: row.at, status: row.status, error: JSON.parse(row.data).error || null } : null;
+  }
   publish(snapshot, result) {
     let added = 0, remembered = 0;
-    const at = now(), active = new Set(result.proposals.map(p => p.id));
+    const at = now(), activeIds = [], history = this.list();
+    const decided = new Map(history.filter(p => !['pending', 'superseded'].includes(p.status))
+      .map(p => [decisionKey(p), p]));
     this.db.exec('BEGIN IMMEDIATE');
     try {
-      for (const old of this.list()) if (old.status === 'pending' && !active.has(old.id)) this.setStatus(old.id, 'superseded');
       for (const item of result.proposals) {
-        const existing = this.get(item.id);
-        if (existing) {
-          this.db.prepare('UPDATE proposals SET last_seen=? WHERE id=?').run(at, item.id);
-          if (existing.status === 'superseded') this.setStatus(item.id, 'pending');
-          else if (existing.status !== 'pending') remembered++;
+        // Preserve older decision IDs and operation journals on upgrade.
+        const prior = decided.get(decisionKey(item));
+        if (prior) {
+          activeIds.push(prior.id);
+          this.db.prepare('UPDATE proposals SET last_seen=? WHERE id=?').run(at, prior.id);
+          remembered++;
+          continue;
+        }
+        activeIds.push(item.id);
+        if (this.get(item.id)) {
+          this.db.prepare("UPDATE proposals SET data=?,status='pending',error=NULL,last_seen=? WHERE id=?")
+            .run(JSON.stringify(item), at, item.id);
         } else {
           this.db.prepare('INSERT INTO proposals VALUES(?,?,?,?,?,?,?)')
             .run(item.id, item.key, JSON.stringify(item), 'pending', null, at, at);
           added++;
         }
       }
-      this.recordRun('complete', { snapshot, result: { ...result, proposals: result.proposals.map(p => p.id) }, summary: {
+      const active = new Set(activeIds);
+      for (const old of history) if (old.status === 'pending' && !active.has(old.id)) this.setStatus(old.id, 'superseded');
+      const pending = this.list().filter(p => p.status === 'pending').length;
+      this.recordRun('complete', { snapshot, result: { ...result, proposals: activeIds }, summary: {
         facilities: snapshot.website.locations.length, accounts: snapshot.accounts.length,
-        added, remembered, pending: this.list().filter(p => p.status === 'pending').length } });
+        contacts: snapshot.contacts.length, added, remembered, pending } });
       this.db.exec('COMMIT');
+      return { added, remembered, pending };
     } catch (error) { this.db.exec('ROLLBACK'); throw error; }
-    return { added, remembered, pending: this.list().filter(p => p.status === 'pending').length };
   }
   async withLock(callback) {
     const owner = randomUUID();

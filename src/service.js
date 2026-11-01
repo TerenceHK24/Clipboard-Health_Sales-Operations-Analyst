@@ -37,8 +37,9 @@ export class ReviewService {
   }
   view() {
     const latest = this.store.latest();
-    return { latest: latest ? { at: latest.at, summary: latest.summary, company: latest.snapshot.website.company,
+    return { lastAttempt: this.store.latestAttempt(), latest: latest ? { at: latest.at, summary: latest.summary, company: latest.snapshot.website.company,
       coverage: latest.snapshot.website.coverage, matches: latest.result.matches, notices: latest.result.notices } : null,
+      accountNames: Object.fromEntries((latest?.snapshot.accounts || []).map(a => [a[this.config.fields.id], a[this.config.fields.name]])),
       manualLinks: this.store.manualLinks(),
       matchChoices: latest?.snapshot.accounts.map(account => Object.fromEntries(
         ['id', 'name', 'street', 'city', 'state', 'care', 'parent', 'revenue', 'ar']
@@ -57,6 +58,7 @@ export class ReviewService {
       if (decision === 'retry') {
         if (!['approved', 'applying', 'blocked'].includes(item.status)) throw new Error('Only an already-approved operation can be resumed.');
       } else if (item.status !== 'pending') throw new Error('Only pending proposals can be approved or rejected.');
+      if (decision !== 'reject' && this.store.latestAttempt()?.status === 'failed') throw new Error('The latest scan failed. Complete a successful scan before approving or resuming changes.');
       this.store.decision(id, decision, reviewer.trim(), note);
       if (decision === 'reject') { this.store.setStatus(id, 'rejected'); return { status: 'rejected' }; }
       // Persist explicit approval BEFORE any network write. Daily scans never call apply().
@@ -86,6 +88,9 @@ export class ReviewService {
           pending.some(item => received.get(item.id) !== item.revision)) {
         throw new Error('The group changed since it was shown. Refresh before deciding. Nothing was written.');
       }
+      if (decision === 'approve' && this.store.latestAttempt()?.status === 'failed') throw new Error('The latest scan failed. Scan successfully before approving changes.');
+      // Public evidence is fetched once per batch; CRM targets are still checked individually.
+      const website = decision === 'approve' && !this.verifyWebsite ? await this.readWebsite() : null;
       // A single explicit group approval is persisted against EVERY reviewed individual revision.
       for (const item of pending) {
         this.store.decision(item.id, `${decision}-group`, reviewer.trim(), `Group ${groupKey}. ${note}`);
@@ -95,7 +100,7 @@ export class ReviewService {
       const results = [];
       for (const item of pending) {
         try {
-          await this.apply(item);
+          await this.apply(item, website);
           this.store.setStatus(item.id, 'applied');
           this.store.decision(item.id, 'applied', reviewer.trim());
           results.push({ id: item.id, status: 'applied' });
@@ -174,7 +179,7 @@ export class ReviewService {
       const current = await this.client.get(check.id);
       if (guardHash(current, this.config) === hash(check.before)) continue;
       // A previously sent PATCH may have succeeded before its response/checkpoint was lost.
-      const ownSteps = item.steps.filter(step => step.method === 'PATCH' && step.id === check.id);
+      const ownSteps = item.steps.filter(step => (step.resource || 'accounts') === 'accounts' && step.method === 'PATCH' && step.id === check.id);
       const expectedAfter = { ...check.before };
       let resolvable = true;
       for (const step of ownSteps) {
@@ -185,7 +190,7 @@ export class ReviewService {
       throw new Error(`CRM account ${check.id} changed since review. No further writes were attempted; scan again and review the fresh evidence.`);
     }
   }
-  async apply(item) {
+  async apply(item, website = null) {
     this.store.setStatus(item.id, 'applying');
     if (item.website?.record_type === 'facility') {
       const saved = this.store.manualLinks()[item.website.source_url] || null;
@@ -196,7 +201,7 @@ export class ReviewService {
     // Website evidence is re-read immediately before applying an approved plan.
     if (this.verifyWebsite) await this.verifyWebsite(item);
     else {
-      const current = await this.readWebsite();
+      const current = website || await this.readWebsite();
       this.checkCoverage(current);
       if (item.website) {
         const observed = item.website.record_type === 'company' ? current.company

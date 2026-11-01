@@ -4,6 +4,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 
 const STATIC = { '/': ['index.html', 'text/html; charset=utf-8'],
   '/app.js': ['app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['styles.css', 'text/css; charset=utf-8'] };
+const { version } = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 const publicRoot = new URL('../public/', import.meta.url);
 function authorized(value, key) {
   const input = Buffer.from(typeof value === 'string' ? value : '');
@@ -48,7 +49,7 @@ export async function startReviewServer(service, { port = 4310, fields = {} } = 
       }
       if (!authorized(request.headers['x-review-key'], key)) { send(401, { error: 'Open the private review URL printed in your terminal.' }); return; }
       if (request.headers.origin && request.headers.origin !== origin) { send(403, { error: 'Cross-origin access is not allowed.' }); return; }
-      if (request.method === 'GET' && url.pathname === '/api/state') { send(200, { ...service.view(), fields }); return; }
+      if (request.method === 'GET' && url.pathname === '/api/state') { send(200, { ...service.view(), fields, version }); return; }
       if (request.method !== 'POST' || request.headers.origin !== origin) { send(403, { error: 'State changes require an authenticated same-origin POST.' }); return; }
       const body = await jsonBody(request);
       if (url.pathname === '/api/scan') { send(200, await service.scan()); return; }

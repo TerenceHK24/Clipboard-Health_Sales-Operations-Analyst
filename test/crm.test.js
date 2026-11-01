@@ -91,7 +91,7 @@ test('verified overlapping pages return each account once without losing data', 
   assert.equal(calls, 4, 'two complete reads are required after detecting overlaps');
 });
 
-test('recover from repeated pages by using a different page_size, with confirmation', async t => {
+test('repeated pages stop without guessing page_size', async t => {
   const accounts = [{ ...parent(), id: 'acc-a' }, { ...account(), id: 'acc-b' }, { ...account(), id: 'acc-c' }];
   let smallCalls = 0, largeCalls = 0;
   const client = await transport(t, (req, res) => {
@@ -108,10 +108,9 @@ test('recover from repeated pages by using a different page_size, with confirmat
       reply(res, { items: [], total: 3 });
     }
   }, { pageSize: 2 });
-  const rows = await client.list();
-  assert.deepEqual(rows.map(r => r.id), ['acc-a', 'acc-b', 'acc-c']);
+  await assert.rejects(client.list(), /pagination stopped advancing/);
   assert.equal(smallCalls, 3);
-  assert.equal(largeCalls, 2, 'fallback snapshot must be read twice');
+  assert.equal(largeCalls, 0, 'no speculative requests');
 });
 
 test('reports the missing ID field and available keys instead of a misleading duplicate error', async t => {

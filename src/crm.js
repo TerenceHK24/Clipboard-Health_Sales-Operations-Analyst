@@ -5,7 +5,7 @@ export class ApiError extends Error {
   constructor(message, status = 0) { super(message); this.name = 'ApiError'; this.status = status; }
 }
 
-/** Only completeness/pagination failures can trigger a read-only retry with a different page size. */
+/** Distinguish incomplete snapshots from authentication and schema errors. */
 class PaginationError extends ApiError {}
 
 export function collection(payload, resource) {
@@ -17,11 +17,32 @@ export function collection(payload, resource) {
   if (total !== null && (!Number.isSafeInteger(total) || total < 0)) throw new ApiError('Invalid API pagination total.');
   return { items, total };
 }
-export function record(payload, idField = 'id') {
-  for (const item of [payload, payload?.data, payload?.account, payload?.item, payload?.contact]) {
-    if (item && typeof item === 'object' && !Array.isArray(item) && typeof item[idField] === 'string' && item[idField]) return item;
+/** Normalize primary keys at the API boundary. No facility-specific IDs.
+ * account_id is an account key, but only a foreign key on a contact.
+ * Explicit custom mappings remain strict; ambiguous aliases are rejected.
+ */
+export function identify(item, resource = 'accounts', idField = 'id', context = '') {
+  const keys = idField === 'id' ? ['id', resource === 'contacts' ? 'contact_id' : 'account_id'] : [idField];
+  const present = keys.filter(key => Object.hasOwn(item || {}, key));
+  if (!item || Array.isArray(item) || typeof item !== 'object' || !present.length ||
+      present.some(key => typeof item[key] !== 'string' || !item[key].trim())) {
+    const available = Object.keys(item || {}).filter(key => !/token|secret|password|authorization/i.test(key)).sort().join(', ');
+    throw new ApiError(`${context}missing string ID field '${idField}' (accepted: ${keys.join(', ')}). ` +
+      `Available field names: ${available || '(none)'}. No proposals published.`);
   }
-  throw new ApiError('API did not return an identifiable record. Write outcome may need read-back verification.');
+  if (new Set(present.map(key => item[key])).size !== 1) throw new ApiError(`${context}conflicting primary ID aliases; no proposals published.`);
+  return { ...item, [idField]: item[present[0]] };
+}
+
+export function record(payload, idField = 'id', resource = 'accounts') {
+  const wireKey = resource === 'contacts' ? 'contact_id' : 'account_id';
+  for (const item of [payload, payload?.data, payload?.account, payload?.item, payload?.contact]) {
+    if (item && typeof item === 'object' && !Array.isArray(item) &&
+        (Object.hasOwn(item, idField) || (idField === 'id' && Object.hasOwn(item, wireKey)))) {
+      return identify(item, resource, idField);
+    }
+  }
+  throw new ApiError('API did not return an identifiable record. Verify any write by reading it back.');
 }
 
 /** GETs may retry; POST/PATCH never retry automatically. Credentials never follow redirects. */
@@ -61,52 +82,22 @@ export class CrmClient {
       catch { throw new ApiError(`${method} ${resource} returned invalid JSON; verify any write by reading it back.`); }
     }
   }
-  /**
-   * The API documents page/page_size but not its ordering or response shape.
-   * Some backends overlap adjacent pages. We may collapse the same unchanged
-   * record ID ONLY when an advertised total proves the unique count complete,
-   * and an independent second read gives exactly the same records.
-   * Otherwise we retry with a different page size or abort without publishing.
-   */
+  /** Use the documented pagination contract; do not guess alternative page sizes. */
   async list(resource = 'accounts', query = {}) {
     if (!['accounts', 'contacts'].includes(resource)) throw new Error('Only account/contact collections can be listed.');
-    const initial = this.config.pageSize;
-    const sizes = [...new Set([
-      initial,
-      Math.min(1000, initial * 2),
-      Math.max(1, Math.floor(initial / 2)),
-      Math.max(1, Math.floor(initial / 5)),
-    ])];
-    const issues = [];
-    for (const [attempt, pageSize] of sizes.entries()) {
-      try {
-        const result = await this.collectPages(resource, query, pageSize);
-        if (attempt || result.overlaps) {
-          // Confirm that the candidate snapshot is stable before using it for proposals.
-          // A repeat read uses only GET; there are no implicit account/contact writes.
-          const verified = await this.collectPages(resource, query, pageSize);
-          if (stable(result.rows) !== stable(verified.rows) || result.total !== verified.total) {
-            throw new PaginationError(`${resource}: snapshots differ on verification with page_size=${pageSize}.`);
-          }
-          console.warn(`CRM ${resource}: complete snapshot verified using page_size=${pageSize}` +
-            (result.overlaps ? ` (${result.overlaps} overlapping page entries deduplicated).` : '.'));
+    try {
+      const result = await this.collectPages(resource, query, this.config.pageSize);
+      if (result.overlaps) {
+        const verified = await this.collectPages(resource, query, this.config.pageSize);
+        if (stable(result.rows) !== stable(verified.rows) || result.total !== verified.total) {
+          throw new PaginationError(`${resource}: snapshots differ on overlap verification.`);
         }
-        return result.rows;
-      } catch (error) {
-        if (!(error instanceof PaginationError)) {
-          // Invalid IDs, invalid response schema and HTTP errors need attention;
-          // changing pagination settings cannot make malformed records safe.
-          if (attempt && error instanceof ApiError && error.status === 422) {
-            issues.push(`page_size=${pageSize}: not supported by API (HTTP 422)`);
-            continue;
-          }
-          throw error;
-        }
-        issues.push(`page_size=${pageSize}: ${error.message}`);
       }
+      return result.rows;
+    } catch (error) {
+      if (!(error instanceof PaginationError)) throw error;
+      throw new ApiError(`Cannot verify complete ${resource} pagination. Read-only scan aborted; no proposals published. ${error.message}`);
     }
-    throw new ApiError(`Cannot verify complete ${resource} pagination. Read-only scan aborted; no proposals published. ` +
-      `Attempts: ${issues.join(' | ')}. Check the API's page/page_size behavior and consider a different configured pageSize.`);
   }
 
   async collectPages(resource, query, pageSize) {
@@ -124,15 +115,9 @@ export class CrmClient {
       }
       const idsOnPage = new Set();
       let fresh = 0;
-      for (const [index, item] of items.entries()) {
-        const id = item?.[idField];
-        if (typeof id !== 'string' || !id.trim()) {
-          const keys = item && typeof item === 'object' && !Array.isArray(item)
-            ? Object.keys(item).filter(key => !/token|secret|password|authorization/i.test(key)).sort().join(', ')
-            : '(not a record object)';
-          throw new ApiError(`CRM ${resource} page ${page}, item ${index + 1}: missing string ID field '${idField}'. ` +
-            `Available field names: ${keys || '(none)'}. Set the correct field mapping in --config; no proposals published.`);
-        }
+      for (const [index, raw] of items.entries()) {
+        const item = identify(raw, resource, idField, `CRM ${resource} page ${page}, item ${index + 1}: `);
+        const id = item[idField];
         if (idsOnPage.has(id)) {
           throw new ApiError(`CRM ${resource} page ${page} contains the same ID twice within one response. ` +
             `This is not a normal page-boundary overlap; refusing an incomplete snapshot.`);
@@ -174,10 +159,16 @@ export class CrmClient {
     throw new PaginationError(`${resource}: page limit ${this.config.maxPages} reached ` +
       `(${rows.size} unique IDs${totalExpected === null ? '' : ` / ${totalExpected} reported`})`);
   }
-  async get(id) { return record(await this.request('GET', 'accounts', { id }), this.config.fields.id); }
-  async create(body) { return record(await this.request('POST', 'accounts', { body }), this.config.fields.id); }
-  async patch(id, body) { return record(await this.request('PATCH', 'accounts', { id, body }), this.config.fields.id); }
-  async getContact(id) { return record(await this.request('GET', 'contacts', { id }), this.config.contactFields.id); }
-  async createContact(body) { return record(await this.request('POST', 'contacts', { body }), this.config.contactFields.id); }
-  async patchContact(id, body) { return record(await this.request('PATCH', 'contacts', { id, body }), this.config.contactFields.id); }
+  async readRecord(method, resource, { id, body } = {}) {
+    const idField = resource === 'contacts' ? this.config.contactFields.id : this.config.fields.id;
+    const row = record(await this.request(method, resource, { id, body }), idField, resource);
+    if (id && row[idField] !== id) throw new ApiError(`${resource}: response ID differs from the requested record; stop and verify.`);
+    return row;
+  }
+  async get(id) { return this.readRecord('GET', 'accounts', { id }); }
+  async create(body) { return this.readRecord('POST', 'accounts', { body }); }
+  async patch(id, body) { return this.readRecord('PATCH', 'accounts', { id, body }); }
+  async getContact(id) { return this.readRecord('GET', 'contacts', { id }); }
+  async createContact(body) { return this.readRecord('POST', 'contacts', { body }); }
+  async patchContact(id, body) { return this.readRecord('PATCH', 'contacts', { id, body }); }
 }
