@@ -1,7 +1,7 @@
 {
   "name": "bellhaven-location-scraper",
-  "version": "2.3.1",
-  "description": "Dynamic public-site discovery and approval-only CRM reconciliation",
+  "version": "2.4.0",
+  "description": "Bellhaven reconciliation plus experimental provider-neutral agent SDK runtime",
   "type": "module",
   "bin": {
     "bellhaven-scrape": "./bin/bellhaven-scrape.js"
@@ -9,7 +9,9 @@
   "scripts": {
     "test": "node --test",
     "test:core": "node --test test/reconcile.test.js test/service.test.js test/crm.test.js test/server.test.js test/sample-cases.test.js test/credential.test.js test/contract.test.js test/administrator.test.js",
-    "start": "node bin/bellhaven-scrape.js review"
+    "start": "node bin/bellhaven-scrape.js review",
+    "universal:demo": "node universal/examples/demo.mjs",
+    "test:universal": "node --test universal/test/*.test.mjs"
   },
   "engines": {
     "node": ">=22.16.0"
@@ -23,7 +25,11 @@
     "public",
     "config",
     "docs",
-    "README.md"
+    "README.md",
+    "universal",
+    "LICENSE",
+    "CONTRIBUTING.md",
+    "SECURITY.md"
   ],
   "license": "MIT"
 }

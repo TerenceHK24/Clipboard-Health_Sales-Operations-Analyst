@@ -14,3 +14,9 @@ __pycache__/
 *.log
 artifacts/
 *.tgz
+# Universal Agent local secrets and journals
+universal/**/node_modules/
+universal/**/.env*
+universal/**/*.sqlite*
+universal/**/secrets*
+universal/**/credentials*

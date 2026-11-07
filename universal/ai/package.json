@@ -1,0 +1,15 @@
+{
+  "name": "@community-agent/optional-ai-sdk",
+  "private": true,
+  "type": "module",
+  "description": "Optional company-owned AI SDK provider runtime",
+  "scripts": {
+    "test": "node --test check/ai-check.mjs"
+  },
+  "dependencies": {
+    "ai": "^7.0.162",
+    "@ai-sdk/openai": "^4.0.110",
+    "@ai-sdk/anthropic": "^4.0.98",
+    "zod": "^4.1.0"
+  }
+}

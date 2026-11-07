@@ -1,3 +1,9 @@
+# Universal Agent SDK — Experimental extension
+
+The original Bellhaven assessment remains available through the same `npx` commands. A vendor-neutral SDK-based business agent prototype is now in [`universal/`](universal/README.md). It supports discovery hypotheses, Decision 1, dynamic action plans, Decision 2, company-approved execution, optional AI SDK 7 BYOK, and MCP/REST/Slack adapters (Slack is a reference integration, not hosted). Try `npm run universal:demo` after cloning.
+
+---
+
 # Bellhaven website / CRM review
 
 A small Node.js app: discover public facilities and the corporate footer, compare the entire CRM, review evidence, and write only explicitly approved changes. No LLM, frontend framework, hosted service, Python runtime or saved CRM credential is required.
