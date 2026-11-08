@@ -59,3 +59,40 @@ This reference adapter stores outstanding Slack one-time requests *in memory*. I
 - The existing Bellhaven administrator integration must remain in the same branch for `npm test` to pass; watch CI for OS-specific issues.
 
 See the top-level [CONTRIBUTING.md](../CONTRIBUTING.md) and [SECURITY.md](../SECURITY.md).
+
+
+## Rich Slack approvals and local IT connection console (v0.2 preview)
+
+A new **company-configurable, not hard-coded final remedy** approval surface is available in:
+
+- `admin/policy-store.mjs`: per-tenant connection manifests, credential **references** (`vault://...`), enabled capabilities, roles, Slack user IDs, authorized scopes and auditable IT changes. A connection is *unverified* until a trusted provider-specific probe succeeds. No provider token is written to SQLite.
+- `admin/console.mjs`, `admin/index.html`, `admin/admin.js`, `admin/admin.css`: loopback-only, locally authenticated IT web UI to configure connections, assign permissions and approvers, and run injected connector probes. The admin access key is ephemeral and in the local URL fragment, not a file.
+- `adapters/slack-workflow.mjs`: rich Block Kit request with evidence preview, four actions (Approve, Reject, View evidence, Ask Agent), Slack-native **second confirmation** for Approve/Reject, modal follow-up, private answers, server-derived permission checks, immutable plan fingerprint, persistent one-use request IDs.
+- `adapters/slack-receiver.mjs`: HTTP callback handler verifying Slack signed raw requests and acknowledging before background writes. Deploy behind HTTPS with a queue in production.
+
+**To try the IT UI without connecting to any real organization:**
+
+```sh
+npm run universal:admin
+```
+
+The UI includes two **synthetic demo** capabilities. Configure provider `demo`, an ID such as `testcrm`, scopes `crm:read,crm:write` (optional `vault://demo/example`), save, and click Test to mark this **demo** connector verified. Enable a demo capability and add Slack manager IDs/scopes. Close the server with Ctrl+C. This does not deploy Slack, acquire an OAuth grant, run AI, or modify any CRM.
+
+### Binding to real Slack / an external AI provider
+
+1. A company admin creates a Slack App, enables Interactivity, configures its HTTPS receiver, and grants appropriate OAuth scopes (start with `chat:write`). Slack's signing secret and bot token are injected by a trusted runtime resolver or enterprise vault. **Never paste them into the Admin UI, CLI arguments, or source files.**
+2. The host registers *tested* capabilities with `CapabilityRegistry`. An IT admin enables capabilities in the local console and maps Slack user IDs/roles/scopes to those capabilities. Configuring an API reference alone does **not** establish a working connection.
+3. The host builds `RichSlackApprovalGateway`, supplies `CompanyPolicyStore`, `SlackApprovalStore`, the capability registry and allowlisted Slack channels. Call `publish({channel,findingId,planId,runtime})` only after Decision 1 has opted to investigate and the plan has been reviewed.
+4. Slack renders rich Blocks and native confirmation dialogs. The Slack callback is verified using the **raw signed form body**; a company-resolved manager identity is required. The callback can open Evidence or Ask Agent modals without changing a CRM. An optional `answerQuestion` handler may use a company-configured AI SDK model with separately authorized, redacted evidence.
+5. On confirmed approval, the gateway invokes the runtime's `decidePlan` after the HTTP response is acknowledged. A company-hosted durable worker invokes `execute` for exactly the approved steps, with each operation independently verified; provide `onApproved` to connect the worker. The demo test uses a synchronous mock worker after ACK, **not** a deployable queue.
+6. Deploy with a durable job queue, hardened OAuth/webhook lifecycle, enterprise SSO, data-loss prevention and encrypted/managed business metadata storage. The Slack approval request database stores **identifiers and state only**, no credentials; unanswered questions are not persisted by this module. Real Slack and other platforms require verified installations before use.
+
+The UI only configures authorization and **references** to connections. It deliberately does not claim to provide one-click OAuth installation for every provider. Native Slack interactive workflows and the IT console are currently reference implementations, not a hosted multi-tenant SaaS.
+
+### Testing
+
+```sh
+npm run test:universal
+```
+
+Additional tests exercise rich Slack message composition, confirm controls, signature verification, view/ask modals, private follow-ups, reply replay rejection, exact-plan guard, durable request store, HTTP ACK order, tenant approval roles, admin console origin/authentication controls, provider probe policy, and secret suppression. All cases use synthetic local data and fake Slack APIs; no external credentials are required.

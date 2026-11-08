@@ -60,3 +60,15 @@ export async function createOwnKeyModel({provider='openai',modelId,apiKey}) {
   }
   throw new Error(`Provider ${provider} not installed; register another AI SDK model factory`);
 }
+
+/** Answer approval questions from a minimal redacted summary. No tools or raw CRM rows. */
+export async function answerReviewQuestion({model,question,finding,plan}){
+  const {generateText}=await import('ai');
+  if(typeof question!=='string'||question.length<3||question.length>1000)throw Error('Invalid follow-up question');
+  const context={issue:String(finding?.summary||'').slice(0,350),explanation:String(finding?.explanation||'').slice(0,500),
+    evidenceRefs:(finding?.evidenceRefs||[]).slice(0,25),planTitle:String(plan?.title||'').slice(0,150),
+    actions:(plan?.steps||[]).slice(0,12).map(s=>({tool:s.tool,mode:s.mode,reason:String(s.reason||'').slice(0,160)}))};
+  const response=await generateText({model,system:'You answer business approval questions from limited evidence. Do not claim access to unknown records or actions. No tools or execution allowed. Explicitly say when evidence is insufficient. Never ask for credentials.',
+    prompt:JSON.stringify({question,context})});
+  return String(response.text||'No grounded answer available.').slice(0,2200);
+}

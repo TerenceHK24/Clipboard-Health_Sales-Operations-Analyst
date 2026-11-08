@@ -2,7 +2,7 @@
  * The agent can only suggest plans. This module alone authorizes side effects.
  * No Slack / CRM / model provider appears in this kernel.
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash, randomUUID,randomBytes,createCipheriv,createDecipheriv } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -49,7 +49,10 @@ export class CapabilityRegistry {
 
 /** Durable decisions and operation receipts. Does not store API keys. */
 export class SqliteJournal {
-  constructor(filePath) {
+  #key;
+  constructor(filePath,{key=null}={}) {
+    if(key&&(!Buffer.isBuffer(key)||key.length!==32))throw Error('Journal encryption requires a 32-byte key');
+    this.#key=key?Buffer.from(key):null;
     mkdirSync(dirname(filePath), { recursive: true, mode: 0o700 });
     this.db = new DatabaseSync(filePath);
     try { chmodSync(filePath, 0o600); } catch { /* Windows uses ACLs. */ }
@@ -69,36 +72,54 @@ export class SqliteJournal {
       );
     `);
   }
-  close() { this.db.close(); }
+  close() { this.db.close();this.#key?.fill(0); }
+  #encode(value,domain,id){
+    const payload=json(value);
+    if(!this.#key)return payload;
+    const iv=randomBytes(12),cipher=createCipheriv('aes-256-gcm',this.#key,iv);
+    cipher.setAAD(Buffer.from(`${domain}:${id}`));
+    const encrypted=Buffer.concat([cipher.update(payload,'utf8'),cipher.final()]);
+    return `enc:v1:${Buffer.concat([iv,cipher.getAuthTag(),encrypted]).toString('base64')}`;
+  }
+  #decode(value,domain,id){
+    if(!value.startsWith('enc:v1:'))return JSON.parse(value);
+    if(!this.#key)throw Error('Encrypted journal requires OPS_AGENT_MASTER_KEY');
+    const buf=Buffer.from(value.slice(7),'base64');
+    if(buf.length<29)throw Error('Corrupt journal cipher');
+    const cipher=createDecipheriv('aes-256-gcm',this.#key,buf.subarray(0,12));
+    cipher.setAAD(Buffer.from(`${domain}:${id}`));cipher.setAuthTag(buf.subarray(12,28));
+    return JSON.parse(Buffer.concat([cipher.update(buf.subarray(28)),cipher.final()]).toString('utf8'));
+  }
   get(id) {
     const row = this.db.prepare('SELECT * FROM findings WHERE id=?').get(id);
-    return row ? { ...row, data: JSON.parse(row.data) } : null;
+    return row ? { ...row, data: this.#decode(row.data,'finding',id) } : null;
   }
   save(record) {
     this.db.prepare(`INSERT INTO findings VALUES(?,?,?,?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET data=excluded.data, discovery_decision=excluded.discovery_decision,
       state=excluded.state, selected_plan=excluded.selected_plan,
       approved_by=excluded.approved_by, updated_at=excluded.updated_at`).run(
-        record.id, record.tenant, record.fingerprint, json(record.data), record.discovery_decision,
+        record.id, record.tenant, record.fingerprint, this.#encode(record.data,'finding',record.id), record.discovery_decision,
         record.state, record.selected_plan, record.approved_by, new Date().toISOString());
   }
   event(findingId, event, actor, details = null) {
     this.db.prepare('INSERT INTO events VALUES (?,?,?,?,?,?)').run(
-      randomUUID(), findingId, event, actor, new Date().toISOString(), details ? json(details) : null);
+      randomUUID(), findingId, event, actor, new Date().toISOString(), details ? this.#encode(details,'event',findingId) : null);
   }
   action(id) { return this.db.prepare('SELECT * FROM actions WHERE id=?').get(id) || null; }
   actionSet(id, findingId, step, state, receipt = null) {
     this.db.prepare(`INSERT INTO actions VALUES(?,?,?,?,?,?)
       ON CONFLICT(id) DO UPDATE SET state=excluded.state,receipt=excluded.receipt,updated_at=excluded.updated_at`).run(
-        id, findingId, step, state, receipt ? json(receipt) : null, new Date().toISOString());
+        id, findingId, step, state, receipt ? this.#encode(receipt,'receipt',id) : null, new Date().toISOString());
   }
   history(findingId) { return this.db.prepare('SELECT event, actor, timestamp FROM events WHERE finding_id=? ORDER BY timestamp').all(findingId); }
+  list(tenant,limit=300) { return this.db.prepare('SELECT id,tenant,discovery_decision,state,selected_plan,approved_by,updated_at,data FROM findings WHERE tenant=? ORDER BY updated_at DESC LIMIT ?').all(tenant,limit).map(row=>({...row,data:this.#decode(row.data,'finding',row.id)})); }
 }
 
 export class GovernedAgentRuntime {
-  constructor({ registry, journal, canApprove = () => false, tenantId }) {
+  constructor({ registry, journal, canApprove = () => false, canExecute = () => true, tenantId }) {
     ensure(registry && journal && tenantId, 'Registry, journal and tenantId are required');
-    Object.assign(this, { registry, journal, canApprove, tenantId });
+    Object.assign(this, { registry, journal, canApprove, canExecute, tenantId });
   }
   /** The only accepted discovery input is an evidence-supported hypothesis. */
   discover({ type, summary, evidenceRefs, confidence = 'unknown', explanation = '' }) {
@@ -187,6 +208,7 @@ export class GovernedAgentRuntime {
     const plan = f.data.plans.find(p => p.id === f.selected_plan);
     ensure(plan && plan.digest === fingerprint(plan.steps), 'Approved plan has changed');
     if (f.state === 'blocked') throw new Error('Blocked operations require manual investigation and a new approval');
+    ensure(await this.canExecute({tenant:this.tenantId,actor:f.approved_by,plan:clone(plan),finding:clone(f.data),context}), 'Approval or execution permission was revoked');
     f.state = 'executing'; this.journal.save(f);
     for (const [index, step] of plan.steps.entries()) {
       const cap = this.registry.get(step.tool);
@@ -202,6 +224,7 @@ export class GovernedAgentRuntime {
         throw new Error(`Capability ${step.tool} changed after approval`);
       }
       try {
+        ensure(await this.canExecute({tenant:this.tenantId,actor:f.approved_by,plan:clone(plan),finding:clone(f.data),context}), 'Execution permission revoked before next step');
         this.journal.actionSet(op, id, index, 'sent');
         const result = await cap.execute(clone(step.args), { ...context, tenantId: this.tenantId, approvedBy: f.approved_by, operationId: op });
         if (cap.mode !== 'read') {
