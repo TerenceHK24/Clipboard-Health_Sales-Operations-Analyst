@@ -2,7 +2,7 @@ name: Tests (synthetic CRM only)
 on:
   push:
     branches: [main]
-    paths: ['src/**', 'bin/**', 'public/**', 'fixtures/**', 'test/**', 'scripts/**', 'package*.json', '.github/workflows/node-tests.yml']
+    paths: ['src/**', 'bin/**', 'public/**', 'fixtures/**', 'test/**', 'scripts/**', 'universal/**', 'package*.json', '.github/workflows/node-tests.yml']
   pull_request:
   workflow_dispatch:
 permissions:
@@ -28,7 +28,7 @@ jobs:
       - run: node bin/bellhaven-scrape.js --version
       - run: node bin/bellhaven-scrape.js --help
   browser:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,8 +38,19 @@ jobs:
       - run: npm install --no-save --package-lock=false playwright@1.57.0
       - run: npx playwright install --with-deps chromium
       - run: node scripts/browser-check.mjs
+      - run: node scripts/ops-browser-check.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: browser-check
           path: artifacts/
+
+  optional-ai-sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --prefix universal/ai --no-audit --no-fund
+      - run: npm --prefix universal/ai test
