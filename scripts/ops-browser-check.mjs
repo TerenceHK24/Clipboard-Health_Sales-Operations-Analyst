@@ -37,9 +37,9 @@ try{
   await page.locator('#source-a').selectOption('crm');await page.locator('#source-b').selectOption('erp');
   await page.locator('#field-pairs').fill('status:status');
   await page.getByRole('button',{name:'Compare sources'}).click();
-  await page.getByText('status differs from status').first().waitFor();
+  await page.locator('#findings-list').getByText('status differs from status').waitFor();
   await page.screenshot({path:'artifacts/ops-studio-findings.png',fullPage:true});
-  await page.getByText('status differs from status').first().click();
+  await page.locator('#findings-list').getByText('status differs from status').click();
   await page.getByRole('button',{name:'Investigate'}).click();
   await page.getByRole('button',{name:'Add custom plan'}).click();
   await page.locator('#plan-editor input').fill('Correct synthetic CRM status');
