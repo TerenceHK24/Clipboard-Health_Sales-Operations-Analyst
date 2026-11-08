@@ -30,7 +30,7 @@ try{
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(server.url,{waitUntil:'networkidle'});
   await page.getByText('Find the unusual.').waitFor({timeout:15000});
-  await page.getByText('Synthetic CRM').waitFor();
+  await page.locator('#source-list').getByText('Synthetic CRM').waitFor();
   mkdirSync('artifacts',{recursive:true});
   await page.screenshot({path:'artifacts/ops-studio-overview.png',fullPage:true});
   await page.getByRole('button',{name:'Data sources'}).click();
